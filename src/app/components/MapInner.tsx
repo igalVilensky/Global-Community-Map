@@ -33,7 +33,7 @@ const EMOTIONS = [
 ];
 
 // Custom mood marker icon
-const createMoodIcon = (emoji) => {
+const createMoodIcon = (emoji: string) => {
   return L.divIcon({
     className: "custom-mood-marker",
     html: `<div class="bg-white rounded-full w-8 h-8 flex items-center justify-center text-lg shadow-lg border-2 border-blue-500">${emoji}</div>`,
