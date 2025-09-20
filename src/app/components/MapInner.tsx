@@ -45,7 +45,14 @@ const createMoodIcon = (emoji: string) => {
 export default function GlobalCommunityMap() {
   const [selectedEmotion, setSelectedEmotion] = useState(EMOTIONS[0]);
   const [moodText, setMoodText] = useState("");
-  const [submissions, setSubmissions] = useState([
+  const [submissions, setSubmissions] = useState<
+    Array<{
+      position: [number, number];
+      mood: string;
+      emotion: string;
+      timestamp: Date;
+    }>
+  >([
     {
       position: [40.7128, -74.006],
       mood: "Loving the energy!",
@@ -65,15 +72,20 @@ export default function GlobalCommunityMap() {
       timestamp: new Date(),
     },
   ]);
-  const [userLocation, setUserLocation] = useState(null);
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(
+    null
+  );
   const [showSuccess, setShowSuccess] = useState(false);
-  const [mapCenter, setMapCenter] = useState([20, 0]);
+  const [mapCenter, setMapCenter] = useState<[number, number]>([20, 0]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const location = [pos.coords.latitude, pos.coords.longitude];
+        const location = [pos.coords.latitude, pos.coords.longitude] as [
+          number,
+          number
+        ];
         setUserLocation(location);
         setMapCenter(location);
       },
