@@ -1,364 +1,529 @@
-import React, { useState, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+// src/app/page.tsx
+"use client";
+
+import React, { useEffect, useMemo, useState } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 import {
-  MapPin,
   Users,
   Heart,
-  Zap,
-  Globe,
   Send,
-  Map,
-  TrendingUp,
+  BarChart2,
+  Smile,
+  Frown,
+  Angry,
+  Moon,
+  HelpCircle,
+  PartyPopper,
+  X,
+  Clock,
 } from "lucide-react";
 
-const markerIcon2x = "/node_modules/leaflet/dist/images/marker-icon-2x.png";
-const markerIcon = "/node_modules/leaflet/dist/images/marker-icon.png";
-const markerShadow = "/node_modules/leaflet/dist/images/marker-shadow.png";
-
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-});
-
+/* ----------------------------
+   CONFIG: emotions + colors
+   ---------------------------- */
 const EMOTIONS = [
-  { emoji: "😊", label: "Happy", color: "from-yellow-400 to-orange-400" },
-  { emoji: "😢", label: "Sad", color: "from-blue-400 to-blue-600" },
-  { emoji: "😡", label: "Angry", color: "from-red-400 to-red-600" },
-  { emoji: "😴", label: "Tired", color: "from-purple-400 to-purple-600" },
-  { emoji: "🤔", label: "Thoughtful", color: "from-green-400 to-green-600" },
-  { emoji: "🎉", label: "Excited", color: "from-pink-400 to-pink-600" },
-];
+  { id: "happy", label: "Happy", icon: Smile, color: "#F6C85F" },
+  { id: "sad", label: "Sad", icon: Frown, color: "#6FA8DC" },
+  { id: "angry", label: "Angry", icon: Angry, color: "#F26B6B" },
+  { id: "tired", label: "Tired", icon: Moon, color: "#9B8CE0" },
+  { id: "thoughtful", label: "Thoughtful", icon: HelpCircle, color: "#7AC89A" },
+  { id: "excited", label: "Excited", icon: PartyPopper, color: "#FF8DAA" },
+] as const;
 
-// Custom mood marker icon
-const createMoodIcon = (emoji: string) => {
-  return L.divIcon({
-    className: "custom-mood-marker",
-    html: `<div class="bg-white rounded-full w-8 h-8 flex items-center justify-center text-lg shadow-lg border-2 border-blue-500">${emoji}</div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 32],
-  });
+type Emotion = (typeof EMOTIONS)[number];
+
+type Submission = {
+  position: [number, number];
+  mood: string;
+  emotionId: string;
+  timestamp: string;
 };
 
-export default function GlobalCommunityMap() {
-  const [selectedEmotion, setSelectedEmotion] = useState(EMOTIONS[0]);
-  const [moodText, setMoodText] = useState("");
-  const [submissions, setSubmissions] = useState<
-    Array<{
-      position: [number, number];
-      mood: string;
-      emotion: string;
-      timestamp: Date;
-    }>
-  >([
-    {
-      position: [40.7128, -74.006],
-      mood: "Loving the energy!",
-      emotion: "😊",
-      timestamp: new Date(),
-    },
-    {
-      position: [51.5074, -0.1278],
-      mood: "Rainy day blues",
-      emotion: "😢",
-      timestamp: new Date(),
-    },
-    {
-      position: [35.6762, 139.6503],
-      mood: "Work is crazy",
-      emotion: "😴",
-      timestamp: new Date(),
-    },
-  ]);
+/* ----------------------------
+   HELPER: create SVG-based divIcon
+   ---------------------------- */
+function createSvgIcon(label: string, color: string, size = 34) {
+  const circleR = size / 2 - 2;
+  const svg = encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 ${size} ${size}'>
+      <defs>
+        <filter id="s" x="-50%" y="-50%" width="200%" height="200%">
+          <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.15"/>
+        </filter>
+      </defs>
+      <g filter="url(#s)">
+        <circle cx="${size / 2}" cy="${
+      size / 2
+    }" r="${circleR}" fill="${color}" stroke="#fff" stroke-width="3"/>
+      </g>
+      <text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial" font-size="${Math.round(
+        size * 0.4
+      )}" font-weight="600" fill="#2c2c2c">${label}</text>
+    </svg>`
+  );
+  const dataUrl = `data:image/svg+xml;charset=utf-8,${svg}`;
+  return L.divIcon({
+    html: `<img src="${dataUrl}" style="width:${size}px;height:${size}px;display:block" alt="${label}" />`,
+    className: "",
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+/* ----------------------------
+   Map panner hook
+   ---------------------------- */
+function MapPanner({ center }: { center: [number, number] | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!center) return;
+    const zoom = Math.max(map.getZoom(), 4);
+    map.flyTo(center, zoom, { duration: 0.8 });
+  }, [center, map]);
+  return null;
+}
+
+/* ----------------------------
+   MAIN PAGE COMPONENT
+   ---------------------------- */
+export default function Page() {
   const [userLocation, setUserLocation] = useState<[number, number] | null>(
     null
   );
-  const [showSuccess, setShowSuccess] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>([20, 0]);
+  const [submissions, setSubmissions] = useState<Submission[]>(() => {
+    return [
+      {
+        position: [40.7128, -74.006],
+        mood: "Beautiful day in the city, feeling energized!",
+        emotionId: "happy",
+        timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
+      },
+      {
+        position: [51.5074, -0.1278],
+        mood: "Rainy weather has me feeling contemplative",
+        emotionId: "sad",
+        timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
+      },
+      {
+        position: [35.6762, 139.6503],
+        mood: "Late night coding session, so tired but productive",
+        emotionId: "tired",
+        timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+      },
+      {
+        position: [48.8566, 2.3522],
+        mood: "Just got promoted at work! Can't contain my excitement",
+        emotionId: "excited",
+        timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
+      },
+    ];
+  });
+
+  const [selectedEmotionId, setSelectedEmotionId] = useState<string>(
+    EMOTIONS[0].id
+  );
+  const [moodText, setMoodText] = useState<string>("");
+  const [showStats, setShowStats] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [showRecent, setShowRecent] = useState(false);
+
+  const emotionMap = useMemo(() => {
+    const m = new Map<string, Emotion>();
+    EMOTIONS.forEach((e) => m.set(e.id, e));
+    return m;
+  }, []);
+
+  const stats = useMemo(() => {
+    const total = submissions.length;
+    const active = Math.max(1, Math.floor(total * 0.7));
+    let top = "—";
+    if (total > 0) {
+      const counts = new Map<string, number>();
+      for (const s of submissions)
+        counts.set(s.emotionId, (counts.get(s.emotionId) || 0) + 1);
+      let max = 0;
+      counts.forEach((n, id) => {
+        if (n > max) {
+          max = n;
+          top = emotionMap.get(id)?.label ?? top;
+        }
+      });
+    }
+    return { total, active, top };
+  }, [submissions, emotionMap]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
+    let mounted = true;
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const location = [pos.coords.latitude, pos.coords.longitude] as [
-          number,
-          number
+        if (!mounted) return;
+        const coords: [number, number] = [
+          pos.coords.latitude,
+          pos.coords.longitude,
         ];
-        setUserLocation(location);
-        setMapCenter(location);
+        setUserLocation(coords);
+        setMapCenter(coords);
       },
-      (err) => console.error(err)
+      (err) => {
+        console.warn("Geolocation failed:", err?.message ?? err);
+      },
+      { maximumAge: 60_000 * 5 }
     );
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const handleSubmit = () => {
-    if (!moodText.trim()) return;
-    if (!userLocation) {
-      alert("Location not detected yet!");
-      return;
-    }
+    if (!moodText.trim())
+      return alert("Please add a description of your mood.");
+    if (!userLocation)
+      return alert(
+        "Location access required. Please allow location and try again."
+      );
 
-    const newSubmission = {
+    const newSub: Submission = {
       position: userLocation,
-      mood: moodText,
-      emotion: selectedEmotion.emoji,
-      timestamp: new Date(),
+      mood: moodText.trim(),
+      emotionId: selectedEmotionId,
+      timestamp: new Date().toISOString(),
     };
-
-    setSubmissions((prev) => [...prev, newSubmission]);
+    setSubmissions((p) => [...p, newSub]);
     setMoodText("");
-    setShowSuccess(true);
-    setTimeout(() => setShowSuccess(false), 3000);
+    setShowForm(false);
+    setMapCenter(userLocation);
   };
 
-  const stats = {
-    totalSubmissions: submissions.length,
-    activeUsers: Math.floor(submissions.length * 0.7),
-    topEmotion: EMOTIONS[0].label,
+  const getIconFor = (emotionId: string) => {
+    const em = emotionMap.get(emotionId);
+    const label = em ? em.label[0].toUpperCase() : "•";
+    const color = em ? em.color : "#999";
+    return createSvgIcon(label, color, 38);
+  };
+
+  const formatTimeAgo = (timestamp: string) => {
+    const diff = Date.now() - new Date(timestamp).getTime();
+    const minutes = Math.floor(diff / (1000 * 60));
+    if (minutes < 1) return "Just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+    <div className="w-full h-screen bg-gray-50 text-gray-900 antialiased relative">
       {/* Header */}
-      <header className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-600/20 to-purple-600/20"></div>
-        <div className="relative container mx-auto px-6 py-8">
-          <div className="flex items-center justify-center gap-4 mb-4">
-            <div className="p-3 bg-gradient-to-r from-blue-500 to-purple-500 rounded-2xl">
-              <Globe className="w-8 h-8 text-white" />
-            </div>
-            <h1 className="text-4xl md:text-6xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-              Global Community Map
-            </h1>
+      <header className="relative z-30 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-bold">
+            G
           </div>
-          <p className="text-center text-slate-300 text-lg max-w-2xl mx-auto">
-            Share your mood with the world and connect with the global
-            community&apos;s emotions in real-time
-          </p>
+          <div className="text-lg font-semibold">Global Mood Map</div>
+          <div className="hidden sm:block px-2 py-1 bg-gray-100 rounded text-xs font-medium">
+            {submissions.length} moods shared
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowStats(!showStats)}
+            className={`flex items-center gap-2 px-3 py-1.5 border rounded-md text-sm font-medium transition-colors ${
+              showStats
+                ? "bg-gray-900 text-white border-gray-900"
+                : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+            }`}
+          >
+            <BarChart2 className="w-4 h-4" />
+            <span className="hidden sm:inline">Stats</span>
+          </button>
+
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              showForm
+                ? "bg-gray-900 text-white"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
+          >
+            <Heart className="w-4 h-4" />
+            <span className="hidden sm:inline">Share Mood</span>
+          </button>
         </div>
       </header>
 
-      <main className="container mx-auto px-6 pb-12">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-gradient-to-r from-blue-500/10 to-blue-600/10 backdrop-blur-sm border border-blue-500/20 rounded-2xl p-6">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-blue-500/20 rounded-xl">
-                <Users className="w-6 h-6 text-blue-400" />
-              </div>
-              <div>
-                <h3 className="text-2xl font-bold text-blue-400">
-                  {stats.totalSubmissions}
-                </h3>
-                <p className="text-slate-400">Total Moods</p>
-              </div>
-            </div>
-          </div>
+      {/* Map Container */}
+      <main className="relative h-[calc(100vh-64px)]">
+        <div className="absolute inset-0 z-10">
+          <MapContainer
+            center={mapCenter}
+            zoom={userLocation ? 6 : 2}
+            style={{ height: "100%", width: "100%" }}
+          >
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <MapPanner center={mapCenter} />
 
-          <div className="bg-gradient-to-r from-green-500/10 to-green-600/10 backdrop-blur-sm border border-green-500/20 rounded-2xl p-6">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-green-500/20 rounded-xl">
-                <Zap className="w-6 h-6 text-green-400" />
-              </div>
-              <div>
-                <h3 className="text-2xl font-bold text-green-400">
-                  {stats.activeUsers}
-                </h3>
-                <p className="text-slate-400">Active Users</p>
-              </div>
-            </div>
-          </div>
+            {userLocation && (
+              <Marker
+                position={userLocation}
+                icon={createSvgIcon("U", "#1f2937", 36)}
+              >
+                <Popup>
+                  <div className="min-w-[160px] p-1">
+                    <div className="font-semibold">Your location</div>
+                    <div className="text-sm text-gray-600 mt-1">
+                      You can submit your mood from here
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            )}
 
-          <div className="bg-gradient-to-r from-purple-500/10 to-purple-600/10 backdrop-blur-sm border border-purple-500/20 rounded-2xl p-6">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-purple-500/20 rounded-xl">
-                <TrendingUp className="w-6 h-6 text-purple-400" />
-              </div>
-              <div>
-                <h3 className="text-2xl font-bold text-purple-400">
-                  😊 {stats.topEmotion}
-                </h3>
-                <p className="text-slate-400">Trending Mood</p>
-              </div>
-            </div>
-          </div>
+            {submissions.map((s, i) => (
+              <Marker
+                key={i}
+                position={s.position}
+                icon={getIconFor(s.emotionId)}
+              >
+                <Popup>
+                  <div className="min-w-[200px] p-1">
+                    <div className="font-semibold text-base mb-2">
+                      {emotionMap.get(s.emotionId)?.label}
+                    </div>
+                    <div className="text-gray-800 mb-2">{s.mood}</div>
+                    <div className="text-xs text-gray-500">
+                      {formatTimeAgo(s.timestamp)}
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
+          </MapContainer>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Mood Input Form */}
-          <div className="lg:col-span-1">
-            <div className="bg-gradient-to-br from-slate-800/50 to-slate-900/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6 sticky top-6">
-              <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
-                <Heart className="w-6 h-6 text-pink-400" />
-                Share Your Mood
-              </h2>
+        {/* Stats Panel */}
+        {showStats && (
+          <div className="absolute top-4 right-4 z-40 w-80 bg-white border border-gray-200 rounded-lg shadow-xl">
+            <div className="p-4 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Users className="w-5 h-5 text-gray-600" />
+                  <div className="font-semibold">Community Stats</div>
+                </div>
+                <button
+                  onClick={() => setShowStats(false)}
+                  className="p-1 hover:bg-gray-100 rounded"
+                >
+                  <X className="w-4 h-4 text-gray-500" />
+                </button>
+              </div>
+            </div>
 
-              <div className="space-y-6">
-                {/* Emotion Selector */}
-                <div>
-                  <label className="block text-sm font-semibold mb-3 text-slate-300">
-                    How are you feeling?
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {EMOTIONS.map((emotion) => (
-                      <button
-                        key={emotion.label}
-                        onClick={() => setSelectedEmotion(emotion)}
-                        className={`p-3 rounded-xl border-2 transition-all duration-200 ${
-                          selectedEmotion.label === emotion.label
-                            ? `bg-gradient-to-r ${emotion.color} border-white/30 shadow-lg scale-105`
-                            : "border-slate-600 hover:border-slate-500 bg-slate-800/50"
-                        }`}
-                      >
-                        <div className="text-2xl mb-1">{emotion.emoji}</div>
-                        <div className="text-xs font-medium">
-                          {emotion.label}
+            <div className="p-4">
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-gray-900">
+                    {stats.total}
+                  </div>
+                  <div className="text-sm text-gray-600">Total Moods</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-green-600">
+                    {stats.active}
+                  </div>
+                  <div className="text-sm text-gray-600">Active Users</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-bold text-blue-600">
+                    {stats.top}
+                  </div>
+                  <div className="text-sm text-gray-600">Top Emotion</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-medium text-gray-700 mb-3">
+                  Recent Activity
+                </div>
+                <div className="space-y-3 max-h-48 overflow-y-auto">
+                  {submissions
+                    .slice(-8)
+                    .reverse()
+                    .map((s, i) => {
+                      const emotion = emotionMap.get(s.emotionId);
+                      return (
+                        <div
+                          key={i}
+                          className="flex items-start gap-3 p-2 bg-gray-50 rounded"
+                        >
+                          <div
+                            className="flex-shrink-0 w-6 h-6 rounded-full border-2 border-white"
+                            style={{
+                              backgroundColor: emotion?.color || "#999",
+                            }}
+                          ></div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium">
+                              {emotion?.label}
+                            </div>
+                            <div className="text-xs text-gray-600 truncate">
+                              {s.mood}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              {formatTimeAgo(s.timestamp)}
+                            </div>
+                          </div>
                         </div>
-                      </button>
-                    ))}
-                  </div>
+                      );
+                    })}
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
 
-                {/* Mood Input */}
-                <div>
-                  <label className="block text-sm font-semibold mb-3 text-slate-300">
-                    What&apos;s on your mind?
-                  </label>
-                  <textarea
-                    value={moodText}
-                    onChange={(e) => setMoodText(e.target.value)}
-                    placeholder="Share your thoughts, feelings, or what's happening..."
-                    className="w-full p-4 bg-slate-800/50 border border-slate-600 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all duration-200 resize-none text-white placeholder-slate-400"
-                    rows={3}
-                    maxLength={280}
-                  />
-                  <div className="text-right text-xs text-slate-400 mt-1">
-                    {moodText.length}/280
-                  </div>
+        {/* Share Form Panel */}
+        {showForm && (
+          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-40 w-[95%] max-w-lg bg-white border border-gray-200 rounded-lg shadow-xl">
+            <div className="p-4 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Heart className="w-5 h-5 text-red-500" />
+                  <div className="font-semibold">Share Your Mood</div>
                 </div>
+                <button
+                  onClick={() => setShowForm(false)}
+                  className="p-1 hover:bg-gray-100 rounded"
+                >
+                  <X className="w-4 h-4 text-gray-500" />
+                </button>
+              </div>
+            </div>
 
-                {/* Submit Button */}
+            <div className="p-4">
+              <div className="mb-4">
+                <div className="text-sm font-medium text-gray-700 mb-2">
+                  How are you feeling?
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {EMOTIONS.map((e) => (
+                    <button
+                      key={e.id}
+                      onClick={() => setSelectedEmotionId(e.id)}
+                      className={`flex items-center gap-2 p-2 rounded-md border text-sm font-medium transition-colors ${
+                        selectedEmotionId === e.id
+                          ? "bg-blue-50 border-blue-300 text-blue-800"
+                          : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <e.icon className="w-4 h-4" />
+                      <span>{e.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <div className="text-sm font-medium text-gray-700 mb-2">
+                  What&apos;s on your mind?
+                </div>
+                <textarea
+                  value={moodText}
+                  onChange={(ev) => setMoodText(ev.target.value)}
+                  rows={3}
+                  maxLength={280}
+                  placeholder="Share what's making you feel this way..."
+                  className="w-full border border-gray-300 rounded-md p-3 text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <div className="text-right text-xs text-gray-500 mt-1">
+                  {moodText.length}/280
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    setMoodText("");
+                    setSelectedEmotionId(EMOTIONS[0].id);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Reset
+                </button>
                 <button
                   onClick={handleSubmit}
                   disabled={!moodText.trim()}
-                  className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:from-slate-600 disabled:to-slate-700 disabled:cursor-not-allowed py-3 px-6 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 shadow-lg hover:shadow-xl"
+                  className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                 >
-                  <Send className="w-5 h-5" />
-                  Share with World
+                  <Send className="w-4 h-4" />
+                  Share Mood
                 </button>
               </div>
-
-              {/* Success Message */}
-              {showSuccess && (
-                <div className="mt-4 p-4 bg-green-500/20 border border-green-500/30 rounded-xl text-green-400 text-center animate-pulse">
-                  ✨ Your mood has been shared with the world!
-                </div>
-              )}
             </div>
           </div>
+        )}
 
-          {/* Map */}
-          <div className="lg:col-span-2">
-            <div className="bg-gradient-to-br from-slate-800/50 to-slate-900/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6">
-              <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
-                <Map className="w-6 h-6 text-blue-400" />
-                Global Mood Map
-              </h2>
+        {/* Recent Moods Toggle */}
+        <div className="absolute bottom-4 left-4 z-40">
+          <button
+            onClick={() => setShowRecent(!showRecent)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-md shadow-lg font-medium text-sm transition-colors ${
+              showRecent
+                ? "bg-gray-900 text-white"
+                : "bg-white text-gray-700 border border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            <span className="hidden sm:inline">Recent</span>
+          </button>
 
-              <div className="w-full h-[500px] rounded-2xl overflow-hidden">
-                <MapContainer
-                  center={mapCenter}
-                  zoom={userLocation ? 10 : 2}
-                  style={{ height: "100%", width: "100%" }}
-                  className="rounded-2xl"
-                >
-                  <TileLayer
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                  />
-
-                  {/* Current user location */}
-                  {userLocation && (
-                    <Marker position={userLocation}>
-                      <Popup>
-                        <div className="text-center">
-                          <strong>📍 Your location</strong>
-                          <br />
-                          Ready to share your mood!
-                        </div>
-                      </Popup>
-                    </Marker>
-                  )}
-
-                  {/* Mood submissions */}
-                  {submissions.map((submission, index) => (
-                    <Marker
-                      key={index}
-                      position={submission.position}
-                      icon={createMoodIcon(submission.emotion)}
-                    >
-                      <Popup>
-                        <div className="text-center max-w-xs">
-                          <div className="text-2xl mb-2">
-                            {submission.emotion}
-                          </div>
-                          <div className="font-semibold text-gray-800">
-                            {submission.mood}
-                          </div>
-                          <div className="text-xs text-gray-500 mt-2">
-                            {submission.timestamp.toLocaleString()}
-                          </div>
-                        </div>
-                      </Popup>
-                    </Marker>
-                  ))}
-                </MapContainer>
+          {showRecent && (
+            <div className="absolute bottom-full left-0 mb-2 w-72 bg-white border border-gray-200 rounded-lg shadow-xl">
+              <div className="p-3 border-b border-gray-100">
+                <div className="font-semibold text-sm">Recent Moods</div>
               </div>
-
-              <div className="mt-4 text-sm text-slate-400 text-center">
-                🌍 {submissions.length} moods shared • Your location:{" "}
-                {userLocation ? "✅ Found" : "📍 Detecting..."}
+              <div className="p-3 max-h-64 overflow-y-auto">
+                <div className="space-y-2">
+                  {submissions
+                    .slice(-6)
+                    .reverse()
+                    .map((s, i) => {
+                      const emotion = emotionMap.get(s.emotionId);
+                      return (
+                        <div
+                          key={i}
+                          className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                          onClick={() => setMapCenter(s.position)}
+                        >
+                          <div
+                            className="w-4 h-4 rounded-full flex-shrink-0"
+                            style={{
+                              backgroundColor: emotion?.color || "#999",
+                            }}
+                          ></div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium">
+                              {emotion?.label}
+                            </div>
+                            <div className="text-xs text-gray-600 truncate">
+                              {s.mood}
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {formatTimeAgo(s.timestamp)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Recent Moods */}
-        <div className="mt-8">
-          <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
-            <TrendingUp className="w-6 h-6 text-green-400" />
-            Recent Moods from Around the World
-          </h2>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {submissions
-              .slice(-6)
-              .reverse()
-              .map((submission, index) => (
-                <div
-                  key={index}
-                  className="bg-gradient-to-br from-slate-800/30 to-slate-900/30 backdrop-blur-sm border border-slate-700/30 rounded-xl p-4 hover:scale-105 transition-all duration-200"
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="text-2xl">{submission.emotion}</div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white font-medium break-words">
-                        {submission.mood}
-                      </p>
-                      <div className="flex items-center gap-2 mt-2 text-xs text-slate-400">
-                        <MapPin className="w-3 h-3" />
-                        <span>
-                          Anonymous •{" "}
-                          {submission.timestamp.toLocaleTimeString()}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-          </div>
+          )}
         </div>
       </main>
     </div>
