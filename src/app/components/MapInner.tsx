@@ -123,7 +123,7 @@ export default function GlobalCommunityMap() {
           </div>
           <p className="text-center text-slate-300 text-lg max-w-2xl mx-auto">
             Share your mood with the world and connect with the global
-            community's emotions in real-time
+            community&apos;s emotions in real-time
           </p>
         </div>
       </header>
@@ -212,7 +212,7 @@ export default function GlobalCommunityMap() {
                 {/* Mood Input */}
                 <div>
                   <label className="block text-sm font-semibold mb-3 text-slate-300">
-                    What's on your mind?
+                    What&apos;s on your mind?
                   </label>
                   <textarea
                     value={moodText}
