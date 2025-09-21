@@ -86,6 +86,65 @@ function createSvgIcon(label: string, color: string, size = 34) {
 }
 
 /* ----------------------------
+   HELPER: generate fake global data
+   ---------------------------- */
+// function generateFakeSubmissions(): Submission[] {
+//   const cities = [
+//     { name: "New York", position: [40.7128, -74.006] },
+//     { name: "London", position: [51.5074, -0.1278] },
+//     { name: "Tokyo", position: [35.6762, 139.6503] },
+//     { name: "Sydney", position: [-33.8688, 151.2093] },
+//     { name: "Rio de Janeiro", position: [-22.9068, -43.1729] },
+//     { name: "Cape Town", position: [-33.9249, 18.4241] },
+//     { name: "Mumbai", position: [19.076, 72.8777] },
+//     { name: "Beijing", position: [39.9042, 116.4074] },
+//     { name: "Paris", position: [48.8566, 2.3522] },
+//     { name: "Moscow", position: [55.7558, 37.6173] },
+//     { name: "Mexico City", position: [19.4326, -99.1332] },
+//     { name: "Bangkok", position: [13.7563, 100.5018] },
+//     { name: "Lagos", position: [6.5244, 3.3792] },
+//     { name: "Toronto", position: [43.6532, -79.3832] },
+//     { name: "Dubai", position: [25.2048, 55.2708] },
+//   ];
+
+//   const moodTemplates = {
+//     happy: ["Feeling great today!", "Loving life!", "So happy right now!"],
+//     sad: ["Feeling down.", "Tough day.", "Missing something today."],
+//     angry: ["So frustrated!", "Really annoyed right now.", "Angry about work."],
+//     tired: ["Exhausted from work.", "Need a nap!", "So sleepy."],
+//     thoughtful: ["Deep in thought.", "Reflecting on life.", "Contemplating."],
+//     excited: ["Super pumped!", "Can't wait!", "So thrilled!"],
+//   };
+
+//   const fakeSubmissions: Submission[] = [];
+//   const now = Date.now();
+
+//   cities.forEach((city) => {
+//     for (let i = 0; i < 7; i++) {
+//       // Generate ~7 submissions per city
+//       const emotion = EMOTIONS[Math.floor(Math.random() * EMOTIONS.length)];
+//       const daysAgo = Math.random() * 30; // Up to 30 days ago
+//       const timestamp = new Date(
+//         now - daysAgo * 24 * 60 * 60 * 1000
+//       ).toISOString();
+//       const mood = moodTemplates[emotion.id][Math.floor(Math.random() * 3)];
+
+//       fakeSubmissions.push({
+//         position: [
+//           city.position[0] + (Math.random() - 0.5) * 0.1, // Slight offset for variety
+//           city.position[1] + (Math.random() - 0.5) * 0.1,
+//         ],
+//         mood,
+//         emotionId: emotion.id,
+//         timestamp,
+//       });
+//     }
+//   });
+
+//   return fakeSubmissions;
+// }
+
+/* ----------------------------
    Map panner hook
    ---------------------------- */
 function MapPanner({ center }: { center: [number, number] | null }) {
@@ -114,16 +173,38 @@ function HeatmapLayer({
     let heatLayer = null;
 
     if (showHeatmap && data.length > 0) {
+      // Map emotions to intensities for heatmap weighting
+      const emotionIntensity: { [key: string]: number } = {
+        happy: 0.6,
+        excited: 0.8,
+        angry: 1.0,
+        sad: 0.4,
+        tired: 0.3,
+        thoughtful: 0.5,
+      };
+
+      // Create a dynamic gradient based on EMOTIONS array
+      const gradient = {
+        0.2: EMOTIONS.find((e) => e.id === "tired")!.color, // Low intensity
+        0.4: EMOTIONS.find((e) => e.id === "sad")!.color, // Low-mid intensity
+        0.5: EMOTIONS.find((e) => e.id === "thoughtful")!.color, // Mid intensity
+        0.6: EMOTIONS.find((e) => e.id === "happy")!.color, // Mid-high intensity
+        0.8: EMOTIONS.find((e) => e.id === "excited")!.color, // High intensity
+        1.0: EMOTIONS.find((e) => e.id === "angry")!.color, // Max intensity
+      };
+
       const heatPoints = data.map((submission) => {
-        const intensity = 1.0; // Fixed high intensity for testing
+        const intensity = emotionIntensity[submission.emotionId] || 0.5;
         return [submission.position[0], submission.position[1], intensity];
       });
+
       // @ts-expect-error - leaflet.heat plugin type definitions are not available
       heatLayer = L.heatLayer(heatPoints, {
-        radius: 100, // Larger radius for visibility
-        blur: 5, // Less blur for sharper spots
+        radius: 40, // Adjusted for better clustering
+        blur: 15, // Moderate blur for smoother transitions
         maxZoom: 17,
-        gradient: { 0.1: "red", 0.5: "red", 1.0: "red" }, // Single color for testing
+        minOpacity: 0.3, // Ensure visibility at low intensity
+        gradient,
       }).addTo(map);
     }
 
@@ -136,8 +217,9 @@ function HeatmapLayer({
 
   return showHeatmap ? (
     <div className="sr-only">
-      Heatmap showing density of mood submissions. Areas with more submissions
-      appear brighter.
+      Heatmap showing density and intensity of mood submissions. Colors
+      represent different emotions: yellow for happy, pink for excited, red for
+      angry, blue for sad, purple for tired, and green for thoughtful.
     </div>
   ) : null;
 }
@@ -196,8 +278,10 @@ export default function Page() {
             timestamp: data.timestamp,
           });
         });
-        console.log("Fetched submissions:", fetchedSubmissions);
         setSubmissions(fetchedSubmissions);
+        // const fakeData = generateFakeSubmissions();
+        // console.log("Generated fake submissions:", fakeData.length);
+        // setSubmissions([...fetchedSubmissions, ...fakeData]);
       },
       (error) => {
         console.error("Firestore error:", error.code, error.message);
