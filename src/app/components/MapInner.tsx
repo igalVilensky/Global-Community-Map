@@ -110,7 +110,7 @@ function HeatmapLayer({
         const intensity = 1.0; // Fixed high intensity for testing
         return [submission.position[0], submission.position[1], intensity];
       });
-
+      // @ts-expect-error - leaflet.heat plugin type definitions are not available
       heatLayer = L.heatLayer(heatPoints, {
         radius: 100, // Larger radius for visibility
         blur: 5, // Less blur for sharper spots
