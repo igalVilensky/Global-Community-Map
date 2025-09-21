@@ -1,10 +1,10 @@
-// src/app/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import "leaflet.heat";
 
 import {
   Users,
@@ -19,6 +19,8 @@ import {
   PartyPopper,
   X,
   Clock,
+  Filter,
+  Layers,
 } from "lucide-react";
 
 /* ----------------------------
@@ -41,6 +43,8 @@ type Submission = {
   emotionId: string;
   timestamp: string;
 };
+
+type TimeFilter = "all" | "24h" | "week" | "month";
 
 /* ----------------------------
    HELPER: create SVG-based divIcon
@@ -81,9 +85,53 @@ function MapPanner({ center }: { center: [number, number] | null }) {
   useEffect(() => {
     if (!center) return;
     const zoom = Math.max(map.getZoom(), 4);
-    map.flyTo(center, zoom, { duration: 0.8 });
+    map.flyTo(center, zoom, { duration: 2 });
   }, [center, map]);
   return null;
+}
+
+/* ----------------------------
+   Heatmap Layer Component
+   ---------------------------- */
+function HeatmapLayer({
+  data,
+  showHeatmap,
+}: {
+  data: Submission[];
+  showHeatmap: boolean;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    let heatLayer = null;
+
+    if (showHeatmap && data.length > 0) {
+      const heatPoints = data.map((submission) => {
+        const intensity = 1.0; // Fixed high intensity for testing
+        return [submission.position[0], submission.position[1], intensity];
+      });
+
+      heatLayer = L.heatLayer(heatPoints, {
+        radius: 100, // Larger radius for visibility
+        blur: 5, // Less blur for sharper spots
+        maxZoom: 17,
+        gradient: { 0.1: "red", 0.5: "red", 1.0: "red" }, // Single color for testing
+      }).addTo(map);
+    }
+
+    return () => {
+      if (heatLayer) {
+        map.removeLayer(heatLayer);
+      }
+    };
+  }, [map, data, showHeatmap]);
+
+  return showHeatmap ? (
+    <div className="sr-only">
+      Heatmap showing density of mood submissions. Areas with more submissions
+      appear brighter.
+    </div>
+  ) : null;
 }
 
 /* ----------------------------
@@ -120,6 +168,43 @@ export default function Page() {
         emotionId: "excited",
         timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
       },
+      {
+        position: [55.8566, 55.3522],
+        mood: "Just had a disagreement with a friend, feeling a bit angry",
+        emotionId: "angry",
+        timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
+      },
+      {
+        position: [34.0522, -118.2437],
+        mood: "Perfect weather for a beach day!",
+        emotionId: "happy",
+        timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+      },
+      {
+        position: [37.7749, -122.4194],
+        mood: "Busy day at work, feeling overwhelmed",
+        emotionId: "sad",
+        timestamp: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
+      },
+      {
+        position: [41.8781, -87.6298],
+        mood: "Deep in thought about life decisions",
+        emotionId: "thoughtful",
+        timestamp: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
+      },
+      // Additional submissions for heatmap density
+      {
+        position: [40.7128, -74.0061],
+        mood: "Enjoying a coffee in the city!",
+        emotionId: "happy",
+        timestamp: new Date().toISOString(),
+      },
+      {
+        position: [40.7129, -74.0062],
+        mood: "Feeling great after a run!",
+        emotionId: "excited",
+        timestamp: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
+      },
     ];
   });
 
@@ -130,6 +215,14 @@ export default function Page() {
   const [showStats, setShowStats] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+
+  // Filter states
+  const [selectedEmotions, setSelectedEmotions] = useState<Set<string>>(
+    new Set(EMOTIONS.map((e) => e.id))
+  );
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
+  const [showHeatmap, setShowHeatmap] = useState(false);
 
   const emotionMap = useMemo(() => {
     const m = new Map<string, Emotion>();
@@ -137,13 +230,44 @@ export default function Page() {
     return m;
   }, []);
 
+  // Filtered submissions based on emotion and time filters
+  const filteredSubmissions = useMemo(() => {
+    return submissions.filter((submission) => {
+      // Filter by emotion
+      if (!selectedEmotions.has(submission.emotionId)) {
+        return false;
+      }
+
+      // Filter by time
+      if (timeFilter !== "all") {
+        const now = Date.now();
+        const submissionTime = new Date(submission.timestamp).getTime();
+        const timeDiff = now - submissionTime;
+
+        switch (timeFilter) {
+          case "24h":
+            if (timeDiff > 24 * 60 * 60 * 1000) return false;
+            break;
+          case "week":
+            if (timeDiff > 7 * 24 * 60 * 60 * 1000) return false;
+            break;
+          case "month":
+            if (timeDiff > 30 * 24 * 60 * 60 * 1000) return false;
+            break;
+        }
+      }
+
+      return true;
+    });
+  }, [submissions, selectedEmotions, timeFilter]);
+
   const stats = useMemo(() => {
-    const total = submissions.length;
+    const total = filteredSubmissions.length;
     const active = Math.max(1, Math.floor(total * 0.7));
     let top = "—";
     if (total > 0) {
       const counts = new Map<string, number>();
-      for (const s of submissions)
+      for (const s of filteredSubmissions)
         counts.set(s.emotionId, (counts.get(s.emotionId) || 0) + 1);
       let max = 0;
       counts.forEach((n, id) => {
@@ -154,7 +278,7 @@ export default function Page() {
       });
     }
     return { total, active, top };
-  }, [submissions, emotionMap]);
+  }, [filteredSubmissions, emotionMap]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -216,6 +340,31 @@ export default function Page() {
     return `${Math.floor(hours / 24)}d ago`;
   };
 
+  const handleEmotionToggle = (emotionId: string) => {
+    const newSelected = new Set(selectedEmotions);
+    if (newSelected.has(emotionId)) {
+      newSelected.delete(emotionId);
+    } else {
+      newSelected.add(emotionId);
+    }
+    setSelectedEmotions(newSelected);
+  };
+
+  const getTimeFilterLabel = (filter: TimeFilter) => {
+    switch (filter) {
+      case "all":
+        return "All Time";
+      case "24h":
+        return "Last 24 Hours";
+      case "week":
+        return "Last Week";
+      case "month":
+        return "Last Month";
+      default:
+        return "All Time";
+    }
+  };
+
   return (
     <div className="w-full h-screen bg-gray-50 text-gray-900 antialiased relative">
       {/* Header */}
@@ -226,7 +375,10 @@ export default function Page() {
           </div>
           <div className="text-lg font-semibold">Global Mood Map</div>
           <div className="hidden sm:block px-2 py-1 bg-gray-100 rounded text-xs font-medium">
-            {submissions.length} moods shared
+            {filteredSubmissions.length} moods{" "}
+            {selectedEmotions.size < EMOTIONS.length || timeFilter !== "all"
+              ? "filtered"
+              : "shared"}
           </div>
         </div>
 
@@ -267,6 +419,10 @@ export default function Page() {
           >
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
             <MapPanner center={mapCenter} />
+            <HeatmapLayer
+              data={filteredSubmissions}
+              showHeatmap={showHeatmap}
+            />
 
             {userLocation && (
               <Marker
@@ -284,28 +440,28 @@ export default function Page() {
               </Marker>
             )}
 
-            {submissions.map((s, i) => (
-              <Marker
-                key={i}
-                position={s.position}
-                icon={getIconFor(s.emotionId)}
-              >
-                <Popup>
-                  <div className="min-w-[200px] p-1">
-                    <div className="font-semibold text-base mb-2">
-                      {emotionMap.get(s.emotionId)?.label}
+            {!showHeatmap &&
+              filteredSubmissions.map((s, i) => (
+                <Marker
+                  key={i}
+                  position={s.position}
+                  icon={getIconFor(s.emotionId)}
+                >
+                  <Popup>
+                    <div className="min-w-[200px] p-1">
+                      <div className="font-semibold text-base mb-2">
+                        {emotionMap.get(s.emotionId)?.label}
+                      </div>
+                      <div className="text-gray-800 mb-2">{s.mood}</div>
+                      <div className="text-xs text-gray-500">
+                        {formatTimeAgo(s.timestamp)}
+                      </div>
                     </div>
-                    <div className="text-gray-800 mb-2">{s.mood}</div>
-                    <div className="text-xs text-gray-500">
-                      {formatTimeAgo(s.timestamp)}
-                    </div>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
+                  </Popup>
+                </Marker>
+              ))}
           </MapContainer>
         </div>
-
         {/* Stats Panel */}
         {showStats && (
           <div className="absolute top-4 right-4 z-40 w-80 bg-white border border-gray-200 rounded-lg shadow-xl">
@@ -351,7 +507,7 @@ export default function Page() {
                   Recent Activity
                 </div>
                 <div className="space-y-3 max-h-48 overflow-y-auto">
-                  {submissions
+                  {filteredSubmissions
                     .slice(-8)
                     .reverse()
                     .map((s, i) => {
@@ -386,7 +542,6 @@ export default function Page() {
             </div>
           </div>
         )}
-
         {/* Share Form Panel */}
         {showForm && (
           <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-40 w-[95%] max-w-lg bg-white border border-gray-200 rounded-lg shadow-xl">
@@ -467,7 +622,6 @@ export default function Page() {
             </div>
           </div>
         )}
-
         {/* Recent Moods Toggle */}
         <div className="absolute bottom-4 left-4 z-40">
           <button
@@ -489,7 +643,7 @@ export default function Page() {
               </div>
               <div className="p-3 max-h-64 overflow-y-auto">
                 <div className="space-y-2">
-                  {submissions
+                  {filteredSubmissions
                     .slice(-6)
                     .reverse()
                     .map((s, i) => {
@@ -521,6 +675,163 @@ export default function Page() {
                       );
                     })}
                 </div>
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Filter Toggle */}
+        <div className="absolute bottom-4 right-4 z-40">
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-md shadow-lg font-medium text-sm transition-colors ${
+              showFilters
+                ? "bg-gray-900 text-white"
+                : "bg-white text-gray-700 border border-gray-200 hover:bg-gray-50"
+            }`}
+            aria-label="Toggle filters and view options"
+          >
+            <Filter className="w-4 h-4" />
+            <span className="hidden sm:inline">Filters</span>
+          </button>
+
+          {showFilters && (
+            <div className="absolute bottom-full right-0 mb-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl">
+              <div className="p-4 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <Filter className="w-5 h-5 text-gray-600" />
+                  <div className="font-semibold">Filters & View</div>
+                </div>
+              </div>
+
+              <div className="p-4 space-y-4">
+                {/* View Toggle */}
+                <div>
+                  <div className="text-sm font-medium text-gray-700 mb-2">
+                    View Mode
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowHeatmap(!showHeatmap)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors ${
+                        showHeatmap
+                          ? "bg-blue-50 border-blue-300 text-blue-800"
+                          : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <Layers className="w-4 h-4" />
+                      <span>{showHeatmap ? "Heatmap" : "Markers"}</span>
+                    </button>
+                    {showHeatmap && (
+                      <div className="text-xs text-gray-500 ml-2">
+                        Density visualization based on mood intensity and
+                        recency
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Time Filter */}
+                <div>
+                  <div className="text-sm font-medium text-gray-700 mb-2">
+                    Time Range
+                  </div>
+                  <select
+                    value={timeFilter}
+                    onChange={(e) =>
+                      setTimeFilter(e.target.value as TimeFilter)
+                    }
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="all">All Time</option>
+                    <option value="24h">Last 24 Hours</option>
+                    <option value="week">Last Week</option>
+                    <option value="month">Last Month</option>
+                  </select>
+                </div>
+
+                {/* Emotion Filters */}
+                <div>
+                  <div className="text-sm font-medium text-gray-700 mb-2">
+                    Emotions ({selectedEmotions.size}/{EMOTIONS.length}{" "}
+                    selected)
+                  </div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    <div className="flex items-center gap-2 mb-2">
+                      <button
+                        onClick={() =>
+                          setSelectedEmotions(
+                            new Set(EMOTIONS.map((e) => e.id))
+                          )
+                        }
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        Select All
+                      </button>
+                      <span className="text-gray-300">|</span>
+                      <button
+                        onClick={() => setSelectedEmotions(new Set())}
+                        className="text-xs text-gray-600 hover:text-gray-800 font-medium"
+                      >
+                        Clear All
+                      </button>
+                    </div>
+                    {EMOTIONS.map((emotion) => (
+                      <label
+                        key={emotion.id}
+                        className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedEmotions.has(emotion.id)}
+                          onChange={() => handleEmotionToggle(emotion.id)}
+                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <div
+                          className="w-4 h-4 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: emotion.color }}
+                        ></div>
+                        <div className="flex items-center gap-2 flex-1">
+                          <emotion.icon className="w-4 h-4 text-gray-600" />
+                          <span className="text-sm font-medium">
+                            {emotion.label}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {
+                            filteredSubmissions.filter(
+                              (s) => s.emotionId === emotion.id
+                            ).length
+                          }
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Filter Summary */}
+                {(selectedEmotions.size < EMOTIONS.length ||
+                  timeFilter !== "all") && (
+                  <div className="pt-2 border-t border-gray-200">
+                    <div className="text-xs text-gray-600 mb-2">
+                      Showing {filteredSubmissions.length} of{" "}
+                      {submissions.length} moods
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {timeFilter !== "all" && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-md">
+                          <Clock className="w-3 h-3" />
+                          {getTimeFilterLabel(timeFilter)}
+                        </span>
+                      )}
+                      {selectedEmotions.size < EMOTIONS.length && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-md">
+                          <Filter className="w-3 h-3" />
+                          {selectedEmotions.size} emotions
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
