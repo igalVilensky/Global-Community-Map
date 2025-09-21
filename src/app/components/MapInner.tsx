@@ -180,9 +180,15 @@ export default function Page() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
+        console.log("Snapshot received, docs:", snapshot.docs.length);
+        console.log("Snapshot metadata:", {
+          hasPendingWrites: snapshot.metadata.hasPendingWrites,
+          fromCache: snapshot.metadata.fromCache,
+        });
         const fetchedSubmissions: Submission[] = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
+          console.log("Doc data:", data);
           fetchedSubmissions.push({
             position: [data.latitude, data.longitude],
             mood: data.mood,
@@ -194,7 +200,7 @@ export default function Page() {
         setSubmissions(fetchedSubmissions);
       },
       (error) => {
-        console.error("Error fetching submissions:", error);
+        console.error("Firestore error:", error.code, error.message);
       }
     );
     return () => unsubscribe();
@@ -289,11 +295,21 @@ export default function Page() {
         emotionId: selectedEmotionId,
         timestamp: new Date().toISOString(),
       });
+      console.log("Mood submitted successfully");
       setMoodText("");
       setShowForm(false);
       setMapCenter(userLocation);
     } catch (error) {
-      console.error("Error submitting mood:", error);
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        "message" in error
+      ) {
+        console.error("Error submitting mood:", error.code, error.message);
+      } else {
+        console.error("Error submitting mood:", error);
+      }
       alert("Failed to submit mood. Please try again.");
     }
   };
