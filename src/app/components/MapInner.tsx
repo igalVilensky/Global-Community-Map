@@ -5,6 +5,14 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet.heat";
+import { db } from "@/app/lib/firebase";
+import {
+  collection,
+  addDoc,
+  query,
+  onSnapshot,
+  orderBy,
+} from "firebase/firestore";
 
 import {
   Users,
@@ -142,72 +150,7 @@ export default function Page() {
     null
   );
   const [mapCenter, setMapCenter] = useState<[number, number]>([20, 0]);
-  const [submissions, setSubmissions] = useState<Submission[]>(() => {
-    return [
-      {
-        position: [40.7128, -74.006],
-        mood: "Beautiful day in the city, feeling energized!",
-        emotionId: "happy",
-        timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-      },
-      {
-        position: [51.5074, -0.1278],
-        mood: "Rainy weather has me feeling contemplative",
-        emotionId: "sad",
-        timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-      },
-      {
-        position: [35.6762, 139.6503],
-        mood: "Late night coding session, so tired but productive",
-        emotionId: "tired",
-        timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-      },
-      {
-        position: [48.8566, 2.3522],
-        mood: "Just got promoted at work! Can't contain my excitement",
-        emotionId: "excited",
-        timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-      },
-      {
-        position: [55.8566, 55.3522],
-        mood: "Just had a disagreement with a friend, feeling a bit angry",
-        emotionId: "angry",
-        timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
-      },
-      {
-        position: [34.0522, -118.2437],
-        mood: "Perfect weather for a beach day!",
-        emotionId: "happy",
-        timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-      },
-      {
-        position: [37.7749, -122.4194],
-        mood: "Busy day at work, feeling overwhelmed",
-        emotionId: "sad",
-        timestamp: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-      },
-      {
-        position: [41.8781, -87.6298],
-        mood: "Deep in thought about life decisions",
-        emotionId: "thoughtful",
-        timestamp: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
-      },
-      // Additional submissions for heatmap density
-      {
-        position: [40.7128, -74.0061],
-        mood: "Enjoying a coffee in the city!",
-        emotionId: "happy",
-        timestamp: new Date().toISOString(),
-      },
-      {
-        position: [40.7129, -74.0062],
-        mood: "Feeling great after a run!",
-        emotionId: "excited",
-        timestamp: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-      },
-    ];
-  });
-
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [selectedEmotionId, setSelectedEmotionId] = useState<string>(
     EMOTIONS[0].id
   );
@@ -228,6 +171,33 @@ export default function Page() {
     const m = new Map<string, Emotion>();
     EMOTIONS.forEach((e) => m.set(e.id, e));
     return m;
+  }, []);
+
+  // Fetch submissions from Firestore in real-time
+  useEffect(() => {
+    console.log("Setting up Firestore listener for 'moods' collection");
+    const q = query(collection(db, "moods"), orderBy("timestamp", "desc"));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const fetchedSubmissions: Submission[] = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          fetchedSubmissions.push({
+            position: [data.latitude, data.longitude],
+            mood: data.mood,
+            emotionId: data.emotionId,
+            timestamp: data.timestamp,
+          });
+        });
+        console.log("Fetched submissions:", fetchedSubmissions);
+        setSubmissions(fetchedSubmissions);
+      },
+      (error) => {
+        console.error("Error fetching submissions:", error);
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
   // Filtered submissions based on emotion and time filters
@@ -303,7 +273,7 @@ export default function Page() {
     };
   }, []);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!moodText.trim())
       return alert("Please add a description of your mood.");
     if (!userLocation)
@@ -311,16 +281,21 @@ export default function Page() {
         "Location access required. Please allow location and try again."
       );
 
-    const newSub: Submission = {
-      position: userLocation,
-      mood: moodText.trim(),
-      emotionId: selectedEmotionId,
-      timestamp: new Date().toISOString(),
-    };
-    setSubmissions((p) => [...p, newSub]);
-    setMoodText("");
-    setShowForm(false);
-    setMapCenter(userLocation);
+    try {
+      await addDoc(collection(db, "moods"), {
+        latitude: userLocation[0],
+        longitude: userLocation[1],
+        mood: moodText.trim(),
+        emotionId: selectedEmotionId,
+        timestamp: new Date().toISOString(),
+      });
+      setMoodText("");
+      setShowForm(false);
+      setMapCenter(userLocation);
+    } catch (error) {
+      console.error("Error submitting mood:", error);
+      alert("Failed to submit mood. Please try again.");
+    }
   };
 
   const getIconFor = (emotionId: string) => {
@@ -350,8 +325,8 @@ export default function Page() {
     setSelectedEmotions(newSelected);
   };
 
-  const getTimeFilterLabel = (filter: TimeFilter) => {
-    switch (filter) {
+  const getTimeFilterLabel = (timeFilter: TimeFilter) => {
+    switch (timeFilter) {
       case "all":
         return "All Time";
       case "24h":
