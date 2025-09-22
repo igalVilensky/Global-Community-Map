@@ -46,13 +46,41 @@ const EMOTIONS = [
 type Emotion = (typeof EMOTIONS)[number];
 
 type Submission = {
+  id: string;
   position: [number, number];
   mood: string;
   emotionId: string;
   timestamp: string;
+  name?: string | null;
+  continent?: string | null;
 };
 
 type TimeFilter = "all" | "24h" | "week" | "month";
+
+/* ----------------------------
+   HELPER: simplified continent lookup
+   ---------------------------- */
+function getContinentFromCoordinates(lat: number, lng: number): string | null {
+  // Simplified bounding box data for continents (minLat, maxLat, minLng, maxLng)
+  const continentBounds: { [key: string]: [number, number, number, number] } = {
+    Africa: [-34.834, 37.0, -17.537, 51.414],
+    Antarctica: [-85.051, -60.0, -180.0, 180.0],
+    Asia: [0.0, 81.857, 26.0, 180.0],
+    Australia: [-43.658, -10.689, 112.837, 153.639],
+    Europe: [36.0, 71.0, -25.0, 45.0],
+    "North America": [7.0, 83.336, -168.0, -52.0],
+    "South America": [-55.0, 12.0, -81.0, -34.0],
+  };
+
+  for (const [continent, [minLat, maxLat, minLng, maxLng]] of Object.entries(
+    continentBounds
+  )) {
+    if (lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng) {
+      return continent;
+    }
+  }
+  return null;
+}
 
 /* ----------------------------
    HELPER: create SVG-based divIcon
@@ -116,27 +144,44 @@ function createSvgIcon(label: string, color: string, size = 34) {
 //     excited: ["Super pumped!", "Can't wait!", "So thrilled!"],
 //   };
 
+//   const names = [
+//     "Alex",
+//     "Sam",
+//     "Taylor",
+//     "Jordan",
+//     "Casey",
+//     "Morgan",
+//     null,
+//     null,
+//     null,
+//     null,
+//   ];
+
 //   const fakeSubmissions: Submission[] = [];
 //   const now = Date.now();
 
 //   cities.forEach((city) => {
 //     for (let i = 0; i < 7; i++) {
-//       // Generate ~7 submissions per city
 //       const emotion = EMOTIONS[Math.floor(Math.random() * EMOTIONS.length)];
-//       const daysAgo = Math.random() * 30; // Up to 30 days ago
+//       const daysAgo = Math.random() * 30;
 //       const timestamp = new Date(
 //         now - daysAgo * 24 * 60 * 60 * 1000
 //       ).toISOString();
 //       const mood = moodTemplates[emotion.id][Math.floor(Math.random() * 3)];
+//       const name = names[Math.floor(Math.random() * names.length)];
+//       const continent = getContinentFromCoordinates(city.position[0], city.position[1]);
 
 //       fakeSubmissions.push({
+//         id: `fake-${city.name}-${i}`,
 //         position: [
-//           city.position[0] + (Math.random() - 0.5) * 0.1, // Slight offset for variety
+//           city.position[0] + (Math.random() - 0.5) * 0.1,
 //           city.position[1] + (Math.random() - 0.5) * 0.1,
 //         ],
 //         mood,
 //         emotionId: emotion.id,
 //         timestamp,
+//         name,
+//         continent,
 //       });
 //     }
 //   });
@@ -185,12 +230,12 @@ function HeatmapLayer({
 
       // Create a dynamic gradient based on EMOTIONS array
       const gradient = {
-        0.2: EMOTIONS.find((e) => e.id === "tired")!.color, // Low intensity
-        0.4: EMOTIONS.find((e) => e.id === "sad")!.color, // Low-mid intensity
-        0.5: EMOTIONS.find((e) => e.id === "thoughtful")!.color, // Mid intensity
-        0.6: EMOTIONS.find((e) => e.id === "happy")!.color, // Mid-high intensity
-        0.8: EMOTIONS.find((e) => e.id === "excited")!.color, // High intensity
-        1.0: EMOTIONS.find((e) => e.id === "angry")!.color, // Max intensity
+        0.2: EMOTIONS.find((e) => e.id === "tired")!.color,
+        0.4: EMOTIONS.find((e) => e.id === "sad")!.color,
+        0.5: EMOTIONS.find((e) => e.id === "thoughtful")!.color,
+        0.6: EMOTIONS.find((e) => e.id === "happy")!.color,
+        0.8: EMOTIONS.find((e) => e.id === "excited")!.color,
+        1.0: EMOTIONS.find((e) => e.id === "angry")!.color,
       };
 
       const heatPoints = data.map((submission) => {
@@ -200,10 +245,10 @@ function HeatmapLayer({
 
       // @ts-expect-error - leaflet.heat plugin type definitions are not available
       heatLayer = L.heatLayer(heatPoints, {
-        radius: 40, // Adjusted for better clustering
-        blur: 15, // Moderate blur for smoother transitions
+        radius: 40,
+        blur: 15,
         maxZoom: 17,
-        minOpacity: 0.3, // Ensure visibility at low intensity
+        minOpacity: 0.3,
         gradient,
       }).addTo(map);
     }
@@ -237,6 +282,7 @@ export default function Page() {
     EMOTIONS[0].id
   );
   const [moodText, setMoodText] = useState<string>("");
+  const [nameText, setNameText] = useState<string>("");
   const [showStats, setShowStats] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
@@ -255,6 +301,10 @@ export default function Page() {
     return m;
   }, []);
 
+  useEffect(() => {
+    document.title = "Global Mood Map";
+  }, []);
+
   // Fetch submissions from Firestore in real-time
   useEffect(() => {
     console.log("Setting up Firestore listener for 'moods' collection");
@@ -268,20 +318,33 @@ export default function Page() {
           fromCache: snapshot.metadata.fromCache,
         });
         const fetchedSubmissions: Submission[] = [];
+        const seenIds = new Set<string>();
         snapshot.forEach((doc) => {
           const data = doc.data();
-          console.log("Doc data:", data);
-          fetchedSubmissions.push({
-            position: [data.latitude, data.longitude],
-            mood: data.mood,
-            emotionId: data.emotionId,
-            timestamp: data.timestamp,
-          });
+          const id = doc.id;
+          if (!seenIds.has(id)) {
+            seenIds.add(id);
+            const continent =
+              data.continent ||
+              data.country ||
+              getContinentFromCoordinates(data.latitude, data.longitude) ||
+              "Unknown";
+            fetchedSubmissions.push({
+              id,
+              position: [data.latitude, data.longitude],
+              mood: data.mood,
+              emotionId: data.emotionId,
+              timestamp: data.timestamp,
+              name: data.name || null,
+              continent,
+            });
+          }
         });
+        fetchedSubmissions.sort(
+          (a, b) =>
+            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
         setSubmissions(fetchedSubmissions);
-        // const fakeData = generateFakeSubmissions();
-        // console.log("Generated fake submissions:", fakeData.length);
-        // setSubmissions([...fetchedSubmissions, ...fakeData]);
       },
       (error) => {
         console.error("Firestore error:", error.code, error.message);
@@ -290,35 +353,40 @@ export default function Page() {
     return () => unsubscribe();
   }, []);
 
-  // Filtered submissions based on emotion and time filters
+  // Filtered submissions
   const filteredSubmissions = useMemo(() => {
-    return submissions.filter((submission) => {
-      // Filter by emotion
-      if (!selectedEmotions.has(submission.emotionId)) {
-        return false;
-      }
-
-      // Filter by time
-      if (timeFilter !== "all") {
-        const now = Date.now();
-        const submissionTime = new Date(submission.timestamp).getTime();
-        const timeDiff = now - submissionTime;
-
-        switch (timeFilter) {
-          case "24h":
-            if (timeDiff > 24 * 60 * 60 * 1000) return false;
-            break;
-          case "week":
-            if (timeDiff > 7 * 24 * 60 * 60 * 1000) return false;
-            break;
-          case "month":
-            if (timeDiff > 30 * 24 * 60 * 60 * 1000) return false;
-            break;
+    const filtered = submissions
+      .filter((submission) => {
+        if (!selectedEmotions.has(submission.emotionId)) {
+          return false;
         }
-      }
 
-      return true;
-    });
+        if (timeFilter !== "all") {
+          const now = Date.now();
+          const submissionTime = new Date(submission.timestamp).getTime();
+          const timeDiff = now - submissionTime;
+
+          switch (timeFilter) {
+            case "24h":
+              if (timeDiff > 24 * 60 * 60 * 1000) return false;
+              break;
+            case "week":
+              if (timeDiff > 7 * 24 * 60 * 60 * 1000) return false;
+              break;
+            case "month":
+              if (timeDiff > 30 * 24 * 60 * 60 * 1000) return false;
+              break;
+          }
+        }
+
+        return true;
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+    console.log("Filtered submissions:", filtered.length);
+    return filtered;
   }, [submissions, selectedEmotions, timeFilter]);
 
   const stats = useMemo(() => {
@@ -372,15 +440,21 @@ export default function Page() {
       );
 
     try {
-      await addDoc(collection(db, "moods"), {
+      const continent =
+        getContinentFromCoordinates(userLocation[0], userLocation[1]) ||
+        "Unknown";
+      const docRef = await addDoc(collection(db, "moods"), {
         latitude: userLocation[0],
         longitude: userLocation[1],
         mood: moodText.trim(),
         emotionId: selectedEmotionId,
         timestamp: new Date().toISOString(),
+        name: nameText.trim() || null,
+        continent,
       });
-      console.log("Mood submitted successfully");
+
       setMoodText("");
+      setNameText("");
       setShowForm(false);
       setMapCenter(userLocation);
     } catch (error) {
@@ -442,6 +516,7 @@ export default function Page() {
 
   return (
     <div className="w-full h-screen bg-gray-50 text-gray-900 antialiased relative">
+      <title>Global Mood Map</title>
       {/* Header */}
       <header className="relative z-30 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
         <div className="flex items-center gap-3">
@@ -516,19 +591,23 @@ export default function Page() {
             )}
 
             {!showHeatmap &&
-              filteredSubmissions.map((s, i) => (
+              filteredSubmissions.map((s) => (
                 <Marker
-                  key={i}
+                  key={s.id}
                   position={s.position}
                   icon={getIconFor(s.emotionId)}
                 >
                   <Popup>
-                    <div className="min-w-[200px] p-1">
-                      <div className="font-semibold text-base mb-2">
-                        {emotionMap.get(s.emotionId)?.label}
+                    <div className="min-w-[200px] p-2">
+                      <div className="font-semibold text-base mb-1">
+                        {emotionMap.get(s.emotionId)?.label || "Unknown"} by{" "}
+                        {s.name || "Anonymous"}
                       </div>
-                      <div className="text-gray-800 mb-2">{s.mood}</div>
+                      <div className="text-sm text-gray-800 mb-1 truncate">
+                        {s.mood}
+                      </div>
                       <div className="text-xs text-gray-500">
+                        {s.continent || "Unknown"} •{" "}
                         {formatTimeAgo(s.timestamp)}
                       </div>
                     </div>
@@ -556,7 +635,7 @@ export default function Page() {
             </div>
 
             <div className="p-4">
-              <div className="grid grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-3 gap-4 mb-4">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-gray-900">
                     {stats.total}
@@ -578,40 +657,40 @@ export default function Page() {
               </div>
 
               <div>
-                <div className="text-sm font-medium text-gray-700 mb-3">
+                <div className="text-sm font-medium text-gray-700 mb-2">
                   Recent Activity
                 </div>
-                <div className="space-y-3 max-h-48 overflow-y-auto">
-                  {filteredSubmissions
-                    .slice(-8)
-                    .reverse()
-                    .map((s, i) => {
-                      const emotion = emotionMap.get(s.emotionId);
-                      return (
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {filteredSubmissions.slice(0, 8).map((s) => {
+                    const emotion = emotionMap.get(s.emotionId);
+
+                    return (
+                      <div
+                        key={s.id}
+                        className="flex items-start gap-2 p-2 bg-gray-50 rounded"
+                      >
                         <div
-                          key={i}
-                          className="flex items-start gap-3 p-2 bg-gray-50 rounded"
-                        >
-                          <div
-                            className="flex-shrink-0 w-6 h-6 rounded-full border-2 border-white"
-                            style={{
-                              backgroundColor: emotion?.color || "#999",
-                            }}
-                          ></div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium">
-                              {emotion?.label}
-                            </div>
-                            <div className="text-xs text-gray-600 truncate">
-                              {s.mood}
-                            </div>
-                            <div className="text-xs text-gray-500 mt-1">
-                              {formatTimeAgo(s.timestamp)}
-                            </div>
+                          className="flex-shrink-0 w-5 h-5 rounded-full border-2 border-white"
+                          style={{
+                            backgroundColor: emotion?.color || "#999",
+                          }}
+                        ></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">
+                            {emotion?.label || "Unknown"} by{" "}
+                            {s.name || "Anonymous"}
+                          </div>
+                          <div className="text-xs text-gray-600 truncate">
+                            {s.mood}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {s.continent || "Unknown"} •{" "}
+                            {formatTimeAgo(s.timestamp)}
                           </div>
                         </div>
-                      );
-                    })}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -636,6 +715,23 @@ export default function Page() {
             </div>
 
             <div className="p-4">
+              <div className="mb-4">
+                <div className="text-sm font-medium text-gray-700 mb-2">
+                  Your Name (Optional)
+                </div>
+                <input
+                  type="text"
+                  value={nameText}
+                  onChange={(ev) => setNameText(ev.target.value)}
+                  maxLength={50}
+                  placeholder="Enter your name or leave blank for anonymous"
+                  className="w-full border border-gray-300 rounded-md p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <div className="text-right text-xs text-gray-500 mt-1">
+                  {nameText.length}/50
+                </div>
+              </div>
+
               <div className="mb-4">
                 <div className="text-sm font-medium text-gray-700 mb-2">
                   How are you feeling?
@@ -679,6 +775,7 @@ export default function Page() {
                 <button
                   onClick={() => {
                     setMoodText("");
+                    setNameText("");
                     setSelectedEmotionId(EMOTIONS[0].id);
                   }}
                   className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
@@ -718,37 +815,44 @@ export default function Page() {
               </div>
               <div className="p-3 max-h-64 overflow-y-auto">
                 <div className="space-y-2">
-                  {filteredSubmissions
-                    .slice(-6)
-                    .reverse()
-                    .map((s, i) => {
-                      const emotion = emotionMap.get(s.emotionId);
-                      return (
+                  {filteredSubmissions.slice(0, 6).map((s) => {
+                    const emotion = emotionMap.get(s.emotionId);
+                    console.log("Recent submission:", {
+                      id: s.id,
+                      emotion: emotion?.label,
+                      name: s.name,
+                      mood: s.mood,
+                      continent: s.continent,
+                      timestamp: s.timestamp,
+                    });
+                    return (
+                      <div
+                        key={s.id}
+                        className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                        onClick={() => setMapCenter(s.position)}
+                      >
                         <div
-                          key={i}
-                          className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
-                          onClick={() => setMapCenter(s.position)}
-                        >
-                          <div
-                            className="w-4 h-4 rounded-full flex-shrink-0"
-                            style={{
-                              backgroundColor: emotion?.color || "#999",
-                            }}
-                          ></div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium">
-                              {emotion?.label}
-                            </div>
-                            <div className="text-xs text-gray-600 truncate">
-                              {s.mood}
-                            </div>
+                          className="w-4 h-4 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor: emotion?.color || "#999",
+                          }}
+                        ></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">
+                            {emotion?.label || "Unknown"} by{" "}
+                            {s.name || "Anonymous"}
                           </div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-gray-600 truncate">
+                            {s.mood}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {s.continent || "Unknown"} •{" "}
                             {formatTimeAgo(s.timestamp)}
                           </div>
                         </div>
-                      );
-                    })}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
