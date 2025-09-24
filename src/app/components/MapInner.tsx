@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Fragment, useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 
 import {
+  ChevronDown,
   Users,
   Heart,
   Send,
@@ -29,7 +30,9 @@ import {
   Clock,
   Filter,
   Layers,
+  Plus,
 } from "lucide-react";
+import { Listbox, Transition } from "@headlessui/react";
 
 /* ----------------------------
    CONFIG: emotions + colors
@@ -45,11 +48,22 @@ const EMOTIONS = [
 
 type Emotion = (typeof EMOTIONS)[number];
 
+type Layer = {
+  id: string;
+  name: string;
+  description: string;
+  type: "free-text" | "poll";
+  options?: string[]; // For poll layers
+  creator: string | null; // Anonymous for now
+  createdAt: string;
+};
+
 type Submission = {
   id: string;
+  layerId: string;
   position: [number, number];
-  mood: string;
-  emotionId: string;
+  mood: string; // Free text or poll answer
+  emotionId?: string; // Optional for non-mood layers
   timestamp: string;
   name?: string | null;
   continent?: string | null;
@@ -61,7 +75,6 @@ type TimeFilter = "all" | "24h" | "week" | "month";
    HELPER: simplified continent lookup
    ---------------------------- */
 function getContinentFromCoordinates(lat: number, lng: number): string | null {
-  // Simplified bounding box data for continents (minLat, maxLat, minLng, maxLng)
   const continentBounds: { [key: string]: [number, number, number, number] } = {
     Africa: [-34.834, 37.0, -17.537, 51.414],
     Antarctica: [-85.051, -60.0, -180.0, 180.0],
@@ -114,82 +127,6 @@ function createSvgIcon(label: string, color: string, size = 34) {
 }
 
 /* ----------------------------
-   HELPER: generate fake global data
-   ---------------------------- */
-// function generateFakeSubmissions(): Submission[] {
-//   const cities = [
-//     { name: "New York", position: [40.7128, -74.006] },
-//     { name: "London", position: [51.5074, -0.1278] },
-//     { name: "Tokyo", position: [35.6762, 139.6503] },
-//     { name: "Sydney", position: [-33.8688, 151.2093] },
-//     { name: "Rio de Janeiro", position: [-22.9068, -43.1729] },
-//     { name: "Cape Town", position: [-33.9249, 18.4241] },
-//     { name: "Mumbai", position: [19.076, 72.8777] },
-//     { name: "Beijing", position: [39.9042, 116.4074] },
-//     { name: "Paris", position: [48.8566, 2.3522] },
-//     { name: "Moscow", position: [55.7558, 37.6173] },
-//     { name: "Mexico City", position: [19.4326, -99.1332] },
-//     { name: "Bangkok", position: [13.7563, 100.5018] },
-//     { name: "Lagos", position: [6.5244, 3.3792] },
-//     { name: "Toronto", position: [43.6532, -79.3832] },
-//     { name: "Dubai", position: [25.2048, 55.2708] },
-//   ];
-
-//   const moodTemplates = {
-//     happy: ["Feeling great today!", "Loving life!", "So happy right now!"],
-//     sad: ["Feeling down.", "Tough day.", "Missing something today."],
-//     angry: ["So frustrated!", "Really annoyed right now.", "Angry about work."],
-//     tired: ["Exhausted from work.", "Need a nap!", "So sleepy."],
-//     thoughtful: ["Deep in thought.", "Reflecting on life.", "Contemplating."],
-//     excited: ["Super pumped!", "Can't wait!", "So thrilled!"],
-//   };
-
-//   const names = [
-//     "Alex",
-//     "Sam",
-//     "Taylor",
-//     "Jordan",
-//     "Casey",
-//     "Morgan",
-//     null,
-//     null,
-//     null,
-//     null,
-//   ];
-
-//   const fakeSubmissions: Submission[] = [];
-//   const now = Date.now();
-
-//   cities.forEach((city) => {
-//     for (let i = 0; i < 7; i++) {
-//       const emotion = EMOTIONS[Math.floor(Math.random() * EMOTIONS.length)];
-//       const daysAgo = Math.random() * 30;
-//       const timestamp = new Date(
-//         now - daysAgo * 24 * 60 * 60 * 1000
-//       ).toISOString();
-//       const mood = moodTemplates[emotion.id][Math.floor(Math.random() * 3)];
-//       const name = names[Math.floor(Math.random() * names.length)];
-//       const continent = getContinentFromCoordinates(city.position[0], city.position[1]);
-
-//       fakeSubmissions.push({
-//         id: `fake-${city.name}-${i}`,
-//         position: [
-//           city.position[0] + (Math.random() - 0.5) * 0.1,
-//           city.position[1] + (Math.random() - 0.5) * 0.1,
-//         ],
-//         mood,
-//         emotionId: emotion.id,
-//         timestamp,
-//         name,
-//         continent,
-//       });
-//     }
-//   });
-
-//   return fakeSubmissions;
-// }
-
-/* ----------------------------
    Map panner hook
    ---------------------------- */
 function MapPanner({ center }: { center: [number, number] | null }) {
@@ -208,9 +145,11 @@ function MapPanner({ center }: { center: [number, number] | null }) {
 function HeatmapLayer({
   data,
   showHeatmap,
+  currentLayer,
 }: {
   data: Submission[];
   showHeatmap: boolean;
+  currentLayer: Layer | null;
 }) {
   const map = useMap();
 
@@ -218,28 +157,46 @@ function HeatmapLayer({
     let heatLayer = null;
 
     if (showHeatmap && data.length > 0) {
-      // Map emotions to intensities for heatmap weighting
-      const emotionIntensity: { [key: string]: number } = {
-        happy: 0.6,
-        excited: 0.8,
-        angry: 1.0,
-        sad: 0.4,
-        tired: 0.3,
-        thoughtful: 0.5,
-      };
+      // Map emotions or poll options to intensities
+      const intensityMap: { [key: string]: number } =
+        currentLayer?.type === "poll"
+          ? Object.fromEntries(
+              (currentLayer.options || []).map((opt, i) => [
+                opt,
+                0.2 + (i * 0.8) / ((currentLayer.options?.length ?? 2) - 1),
+              ])
+            )
+          : {
+              happy: 0.6,
+              excited: 0.8,
+              angry: 1.0,
+              sad: 0.4,
+              tired: 0.3,
+              thoughtful: 0.5,
+            };
 
-      // Create a dynamic gradient based on EMOTIONS array
-      const gradient = {
-        0.2: EMOTIONS.find((e) => e.id === "tired")!.color,
-        0.4: EMOTIONS.find((e) => e.id === "sad")!.color,
-        0.5: EMOTIONS.find((e) => e.id === "thoughtful")!.color,
-        0.6: EMOTIONS.find((e) => e.id === "happy")!.color,
-        0.8: EMOTIONS.find((e) => e.id === "excited")!.color,
-        1.0: EMOTIONS.find((e) => e.id === "angry")!.color,
-      };
+      // Create a dynamic gradient
+      const gradient =
+        currentLayer?.type === "poll"
+          ? {
+              0.2: "#FFEDA0",
+              0.4: "#FEB24C",
+              0.6: "#FD8D3C",
+              0.8: "#F03B20",
+              1.0: "#BD0026",
+            }
+          : {
+              0.2: EMOTIONS.find((e) => e.id === "tired")!.color,
+              0.4: EMOTIONS.find((e) => e.id === "sad")!.color,
+              0.5: EMOTIONS.find((e) => e.id === "thoughtful")!.color,
+              0.6: EMOTIONS.find((e) => e.id === "happy")!.color,
+              0.8: EMOTIONS.find((e) => e.id === "excited")!.color,
+              1.0: EMOTIONS.find((e) => e.id === "angry")!.color,
+            };
 
       const heatPoints = data.map((submission) => {
-        const intensity = emotionIntensity[submission.emotionId] || 0.5;
+        const intensity =
+          intensityMap[submission.emotionId || submission.mood] || 0.5;
         return [submission.position[0], submission.position[1], intensity];
       });
 
@@ -258,13 +215,12 @@ function HeatmapLayer({
         map.removeLayer(heatLayer);
       }
     };
-  }, [map, data, showHeatmap]);
+  }, [map, data, showHeatmap, currentLayer]);
 
   return showHeatmap ? (
     <div className="sr-only">
-      Heatmap showing density and intensity of mood submissions. Colors
-      represent different emotions: yellow for happy, pink for excited, red for
-      angry, blue for sad, purple for tired, and green for thoughtful.
+      Heatmap showing density and intensity of submissions. Colors represent
+      different {currentLayer?.type === "poll" ? "answers" : "emotions"}.
     </div>
   ) : null;
 }
@@ -278,7 +234,26 @@ export default function Page() {
   );
   const [mapCenter, setMapCenter] = useState<[number, number]>([20, 0]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [selectedEmotionId, setSelectedEmotionId] = useState<string>(
+  const [layers, setLayers] = useState<Layer[]>([
+    {
+      id: "global-moods",
+      name: "Global Moods",
+      description: "Share how you're feeling today",
+      type: "free-text",
+      creator: null,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "daily-thoughts",
+      name: "Daily Thoughts",
+      description: "Share a thought or idea",
+      type: "free-text",
+      creator: null,
+      createdAt: new Date().toISOString(),
+    },
+  ]);
+  const [currentLayerId, setCurrentLayerId] = useState<string>("global-moods");
+  const [selectedEmotionId, setSelectedEmotionId] = useState<string | null>(
     EMOTIONS[0].id
   );
   const [moodText, setMoodText] = useState<string>("");
@@ -287,13 +262,20 @@ export default function Page() {
   const [showForm, setShowForm] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [showCreateLayer, setShowCreateLayer] = useState(false);
+  const [newLayerName, setNewLayerName] = useState("");
+  const [newLayerDescription, setNewLayerDescription] = useState("");
+  const [newLayerType, setNewLayerType] = useState<"free-text" | "poll">(
+    "free-text"
+  );
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const [showHeatmap, setShowHeatmap] = useState(false);
 
   // Filter states
   const [selectedEmotions, setSelectedEmotions] = useState<Set<string>>(
     new Set(EMOTIONS.map((e) => e.id))
   );
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
-  const [showHeatmap, setShowHeatmap] = useState(false);
 
   const emotionMap = useMemo(() => {
     const m = new Map<string, Emotion>();
@@ -301,22 +283,70 @@ export default function Page() {
     return m;
   }, []);
 
+  const currentLayer = useMemo(() => {
+    return layers.find((l) => l.id === currentLayerId) || null;
+  }, [layers, currentLayerId]);
+
   useEffect(() => {
-    document.title = "Global Mood Map";
+    document.title = `Global Mood Map - ${currentLayer?.name || "Map"}`;
+  }, [currentLayer]);
+
+  // Fetch layers from Firestore
+  useEffect(() => {
+    const q = query(collection(db, "layers"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const fetchedLayers: Layer[] = [
+          {
+            id: "global-moods",
+            name: "Global Moods",
+            description: "Share how you're feeling today",
+            type: "free-text",
+            creator: null,
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: "daily-thoughts",
+            name: "Daily Thoughts",
+            description: "Share a thought or idea",
+            type: "free-text",
+            creator: null,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          fetchedLayers.push({
+            id: doc.id,
+            name: data.name,
+            description: data.description,
+            type: data.type,
+            options: data.options || [],
+            creator: data.creator || null,
+            createdAt: data.createdAt,
+          });
+        });
+        setLayers(fetchedLayers);
+      },
+      (error) => {
+        console.error("Firestore error (layers):", error.code, error.message);
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
   // Fetch submissions from Firestore in real-time
   useEffect(() => {
-    console.log("Setting up Firestore listener for 'moods' collection");
-    const q = query(collection(db, "moods"), orderBy("timestamp", "desc"));
+    console.log("Setting up Firestore listener for 'submissions' collection");
+    const q = query(
+      collection(db, "submissions"),
+      orderBy("timestamp", "desc")
+    );
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         console.log("Snapshot received, docs:", snapshot.docs.length);
-        console.log("Snapshot metadata:", {
-          hasPendingWrites: snapshot.metadata.hasPendingWrites,
-          fromCache: snapshot.metadata.fromCache,
-        });
         const fetchedSubmissions: Submission[] = [];
         const seenIds = new Set<string>();
         snapshot.forEach((doc) => {
@@ -326,14 +356,14 @@ export default function Page() {
             seenIds.add(id);
             const continent =
               data.continent ||
-              data.country ||
               getContinentFromCoordinates(data.latitude, data.longitude) ||
               "Unknown";
             fetchedSubmissions.push({
               id,
+              layerId: data.layerId || "global-moods",
               position: [data.latitude, data.longitude],
               mood: data.mood,
-              emotionId: data.emotionId,
+              emotionId: data.emotionId || undefined,
               timestamp: data.timestamp,
               name: data.name || null,
               continent,
@@ -357,8 +387,10 @@ export default function Page() {
   const filteredSubmissions = useMemo(() => {
     const filtered = submissions
       .filter((submission) => {
-        if (!selectedEmotions.has(submission.emotionId)) {
-          return false;
+        if (submission.layerId !== currentLayerId) return false;
+
+        if (currentLayer?.type === "free-text" && submission.emotionId) {
+          if (!selectedEmotions.has(submission.emotionId)) return false;
         }
 
         if (timeFilter !== "all") {
@@ -387,7 +419,7 @@ export default function Page() {
       );
     console.log("Filtered submissions:", filtered.length);
     return filtered;
-  }, [submissions, selectedEmotions, timeFilter]);
+  }, [submissions, currentLayerId, selectedEmotions, timeFilter, currentLayer]);
 
   const stats = useMemo(() => {
     const total = filteredSubmissions.length;
@@ -395,18 +427,24 @@ export default function Page() {
     let top = "—";
     if (total > 0) {
       const counts = new Map<string, number>();
-      for (const s of filteredSubmissions)
-        counts.set(s.emotionId, (counts.get(s.emotionId) || 0) + 1);
+      for (const s of filteredSubmissions) {
+        const key =
+          currentLayer?.type === "poll" ? s.mood : s.emotionId || s.mood;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
       let max = 0;
       counts.forEach((n, id) => {
         if (n > max) {
           max = n;
-          top = emotionMap.get(id)?.label ?? top;
+          top =
+            currentLayer?.type === "poll"
+              ? id
+              : emotionMap.get(id)?.label ?? id;
         }
       });
     }
     return { total, active, top };
-  }, [filteredSubmissions, emotionMap]);
+  }, [filteredSubmissions, emotionMap, currentLayer]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -432,26 +470,54 @@ export default function Page() {
   }, []);
 
   const handleSubmit = async () => {
-    if (!moodText.trim())
-      return alert("Please add a description of your mood.");
-    if (!userLocation)
+    // Validate input: require moodText for free-text layers, ensure valid option for poll layers
+    if (!moodText.trim()) {
+      return alert("Please select an option or enter a description.");
+    }
+    if (
+      currentLayer?.type === "poll" &&
+      !currentLayer.options?.includes(moodText)
+    ) {
+      return alert("Please select a valid poll option.");
+    }
+    if (!userLocation) {
       return alert(
         "Location access required. Please allow location and try again."
       );
+    }
 
     try {
       const continent =
         getContinentFromCoordinates(userLocation[0], userLocation[1]) ||
         "Unknown";
-      const docRef = await addDoc(collection(db, "moods"), {
+      const submissionData: {
+        layerId: string;
+        latitude: number;
+        longitude: number;
+        mood: string;
+        timestamp: string;
+        name: string | null;
+        continent: string;
+        emotionId?: string;
+      } = {
+        layerId: currentLayerId,
         latitude: userLocation[0],
         longitude: userLocation[1],
         mood: moodText.trim(),
-        emotionId: selectedEmotionId,
         timestamp: new Date().toISOString(),
         name: nameText.trim() || null,
         continent,
-      });
+      };
+
+      // Only include emotionId for free-text layers
+      if (currentLayer?.type === "free-text" && selectedEmotionId) {
+        submissionData.emotionId = selectedEmotionId;
+      }
+
+      // const docRef = await addDoc(
+      //   collection(db, "submissions"),
+      //   submissionData
+      // );
 
       setMoodText("");
       setNameText("");
@@ -468,13 +534,53 @@ export default function Page() {
       } else {
         console.error("Error submitting mood:", error);
       }
-      alert("Failed to submit mood. Please try again.");
+      alert("Failed to submit. Please try again.");
     }
   };
 
-  const getIconFor = (emotionId: string) => {
-    const em = emotionMap.get(emotionId);
-    const label = em ? em.label[0].toUpperCase() : "•";
+  const handleCreateLayer = async () => {
+    if (!newLayerName.trim()) return alert("Layer name is required.");
+    if (!newLayerDescription.trim())
+      return alert("Layer description is required.");
+    if (newLayerType === "poll" && pollOptions.some((opt) => !opt.trim()))
+      return alert("All poll options must be filled.");
+
+    try {
+      const docRef = await addDoc(collection(db, "layers"), {
+        name: newLayerName.trim(),
+        description: newLayerDescription.trim(),
+        type: newLayerType,
+        options:
+          newLayerType === "poll"
+            ? pollOptions.filter((opt) => opt.trim())
+            : [],
+        creator: null,
+        createdAt: new Date().toISOString(),
+      });
+      setNewLayerName("");
+      setNewLayerDescription("");
+      setNewLayerType("free-text");
+      setPollOptions(["", ""]);
+      setShowCreateLayer(false);
+      setCurrentLayerId(docRef.id);
+    } catch (error) {
+      console.error("Error creating layer:", error);
+      alert("Failed to create layer. Please try again.");
+    }
+  };
+
+  const getIconFor = (submission: Submission) => {
+    if (currentLayer?.type === "poll") {
+      const index = currentLayer.options?.indexOf(submission.mood) || 0;
+      const color = ["#FFEDA0", "#FEB24C", "#FD8D3C", "#F03B20", "#BD0026"][
+        index % 5
+      ];
+      return createSvgIcon(submission.mood[0]?.toUpperCase() || "•", color, 38);
+    }
+    const em = emotionMap.get(submission.emotionId || "");
+    const label = em
+      ? em.label[0].toUpperCase()
+      : submission.mood[0]?.toUpperCase() || "•";
     const color = em ? em.color : "#999";
     return createSvgIcon(label, color, 38);
   };
@@ -516,23 +622,69 @@ export default function Page() {
 
   return (
     <div className="w-full h-screen bg-gray-50 text-gray-900 antialiased relative">
-      <title>Global Mood Map</title>
       {/* Header */}
       <header className="relative z-30 flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-bold">
             G
           </div>
-          <div className="text-lg font-semibold">Global Mood Map</div>
+          <Listbox
+            value={currentLayerId}
+            onChange={(value) => {
+              setCurrentLayerId(value);
+              setSelectedEmotionId(EMOTIONS[0].id);
+              setSelectedEmotions(new Set(EMOTIONS.map((e) => e.id)));
+              setTimeFilter("all");
+            }}
+          >
+            <Listbox.Button className="flex items-center gap-2 text-lg font-semibold max-w-[140px] sm:max-w-[200px] truncate">
+              <span className="truncate">
+                {layers.find((l) => l.id === currentLayerId)?.name ||
+                  "Select Layer"}
+              </span>
+              <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+            </Listbox.Button>
+            <Transition
+              as={Fragment}
+              enter="transition ease-out duration-100"
+              enterFrom="opacity-0 scale-95"
+              enterTo="opacity-100 scale-100"
+              leave="transition ease-in duration-100"
+              leaveFrom="opacity-100 scale-100"
+              leaveTo="opacity-0 scale-95"
+            >
+              <Listbox.Options className="absolute left-0 top-12 max-h-60 w-64 bg-white border border-gray-200 rounded-md shadow-lg overflow-y-auto">
+                {layers.map((layer) => (
+                  <Listbox.Option
+                    key={layer.id}
+                    value={layer.id}
+                    className="p-2 hover:bg-gray-100 truncate cursor-pointer"
+                  >
+                    {layer.name.length > 20
+                      ? `${layer.name.slice(0, 17)}...`
+                      : layer.name}
+                  </Listbox.Option>
+                ))}
+              </Listbox.Options>
+            </Transition>
+          </Listbox>
           <div className="hidden sm:block px-2 py-1 bg-gray-100 rounded text-xs font-medium">
-            {filteredSubmissions.length} moods{" "}
-            {selectedEmotions.size < EMOTIONS.length || timeFilter !== "all"
-              ? "filtered"
-              : "shared"}
+            {filteredSubmissions.length} submissions
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCreateLayer(!showCreateLayer)}
+            className={`flex items-center gap-2 px-3 py-1.5 border rounded-md text-sm font-medium transition-colors ${
+              showCreateLayer
+                ? "bg-gray-900 text-white border-gray-900"
+                : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+            }`}
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">New Layer</span>
+          </button>
           <button
             onClick={() => setShowStats(!showStats)}
             className={`flex items-center gap-2 px-3 py-1.5 border rounded-md text-sm font-medium transition-colors ${
@@ -544,7 +696,6 @@ export default function Page() {
             <BarChart2 className="w-4 h-4" />
             <span className="hidden sm:inline">Stats</span>
           </button>
-
           <button
             onClick={() => setShowForm(!showForm)}
             className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -554,7 +705,7 @@ export default function Page() {
             }`}
           >
             <Heart className="w-4 h-4" />
-            <span className="hidden sm:inline">Share Mood</span>
+            <span className="hidden sm:inline">Share</span>
           </button>
         </div>
       </header>
@@ -572,6 +723,7 @@ export default function Page() {
             <HeatmapLayer
               data={filteredSubmissions}
               showHeatmap={showHeatmap}
+              currentLayer={currentLayer}
             />
 
             {userLocation && (
@@ -583,7 +735,8 @@ export default function Page() {
                   <div className="min-w-[160px] p-1">
                     <div className="font-semibold">Your location</div>
                     <div className="text-sm text-gray-600 mt-1">
-                      You can submit your mood from here
+                      You can submit to {currentLayer?.name || "this layer"}{" "}
+                      from here
                     </div>
                   </div>
                 </Popup>
@@ -592,16 +745,15 @@ export default function Page() {
 
             {!showHeatmap &&
               filteredSubmissions.map((s) => (
-                <Marker
-                  key={s.id}
-                  position={s.position}
-                  icon={getIconFor(s.emotionId)}
-                >
+                <Marker key={s.id} position={s.position} icon={getIconFor(s)}>
                   <Popup>
                     <div className="min-w-[200px] p-2">
                       <div className="font-semibold text-base mb-1">
-                        {emotionMap.get(s.emotionId)?.label || "Unknown"} by{" "}
-                        {s.name || "Anonymous"}
+                        {currentLayer?.type === "poll"
+                          ? s.mood
+                          : emotionMap.get(s.emotionId || "")?.label ||
+                            s.mood}{" "}
+                        by {s.name || "Anonymous"}
                       </div>
                       <div className="text-sm text-gray-800 mb-1 truncate">
                         {s.mood}
@@ -616,6 +768,140 @@ export default function Page() {
               ))}
           </MapContainer>
         </div>
+
+        {/* Create Layer Panel */}
+        {showCreateLayer && (
+          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-40 w-[95%] max-w-lg bg-white border border-gray-200 rounded-lg shadow-xl">
+            <div className="p-4 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-blue-500" />
+                  <div className="font-semibold">Create New Layer</div>
+                </div>
+                <button
+                  onClick={() => setShowCreateLayer(false)}
+                  className="p-1 hover:bg-gray-100 rounded"
+                >
+                  <X className="w-4 h-4 text-gray-500" />
+                </button>
+              </div>
+            </div>
+            <div className="p-4">
+              <div className="mb-4">
+                <div className="text-sm font-medium text-gray-700 mb-2">
+                  Layer Name
+                </div>
+                <input
+                  type="text"
+                  value={newLayerName}
+                  onChange={(e) => setNewLayerName(e.target.value)}
+                  maxLength={50}
+                  placeholder="e.g., Favorite Local Food"
+                  className="w-full border border-gray-300 rounded-md p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <div className="text-right text-xs text-gray-500 mt-1">
+                  {newLayerName.length}/50
+                </div>
+              </div>
+              <div className="mb-4">
+                <div className="text-sm font-medium text-gray-700 mb-2">
+                  Description
+                </div>
+                <textarea
+                  value={newLayerDescription}
+                  onChange={(e) => setNewLayerDescription(e.target.value)}
+                  rows={3}
+                  maxLength={280}
+                  placeholder="Describe what this layer is about..."
+                  className="w-full border border-gray-300 rounded-md p-3 text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <div className="text-right text-xs text-gray-500 mt-1">
+                  {newLayerDescription.length}/280
+                </div>
+              </div>
+              <div className="mb-4">
+                <div className="text-sm font-medium text-gray-700 mb-2">
+                  Layer Type
+                </div>
+                <select
+                  value={newLayerType}
+                  onChange={(e) =>
+                    setNewLayerType(e.target.value as "free-text" | "poll")
+                  }
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="free-text">Free Text</option>
+                  <option value="poll">Poll (Multiple Choice)</option>
+                </select>
+              </div>
+              {newLayerType === "poll" && (
+                <div className="mb-4">
+                  <div className="text-sm font-medium text-gray-700 mb-2">
+                    Poll Options (2-4)
+                  </div>
+                  {pollOptions.map((option, index) => (
+                    <div key={index} className="flex items-center gap-2 mb-2">
+                      <input
+                        type="text"
+                        value={option}
+                        onChange={(e) => {
+                          const newOptions = [...pollOptions];
+                          newOptions[index] = e.target.value;
+                          setPollOptions(newOptions);
+                        }}
+                        maxLength={50}
+                        placeholder={`Option ${index + 1}`}
+                        className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      {index >= 2 && (
+                        <button
+                          onClick={() =>
+                            setPollOptions(
+                              pollOptions.filter((_, i) => i !== index)
+                            )
+                          }
+                          className="p-1 text-red-500 hover:text-red-700"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {pollOptions.length < 4 && (
+                    <button
+                      onClick={() => setPollOptions([...pollOptions, ""])}
+                      className="text-sm text-blue-600 hover:text-blue-800"
+                    >
+                      + Add Option
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    setNewLayerName("");
+                    setNewLayerDescription("");
+                    setNewLayerType("free-text");
+                    setPollOptions(["", ""]);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={handleCreateLayer}
+                  disabled={!newLayerName.trim() || !newLayerDescription.trim()}
+                  className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-4 h-4" />
+                  Create Layer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Stats Panel */}
         {showStats && (
           <div className="absolute top-4 right-4 z-40 w-80 bg-white border border-gray-200 rounded-lg shadow-xl">
@@ -623,7 +909,7 @@ export default function Page() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Users className="w-5 h-5 text-gray-600" />
-                  <div className="font-semibold">Community Stats</div>
+                  <div className="font-semibold">Layer Stats</div>
                 </div>
                 <button
                   onClick={() => setShowStats(false)}
@@ -633,14 +919,13 @@ export default function Page() {
                 </button>
               </div>
             </div>
-
             <div className="p-4">
               <div className="grid grid-cols-3 gap-4 mb-4">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-gray-900">
                     {stats.total}
                   </div>
-                  <div className="text-sm text-gray-600">Total Moods</div>
+                  <div className="text-sm text-gray-600">Total Submissions</div>
                 </div>
                 <div className="text-center">
                   <div className="text-2xl font-bold text-green-600">
@@ -652,18 +937,18 @@ export default function Page() {
                   <div className="text-lg font-bold text-blue-600">
                     {stats.top}
                   </div>
-                  <div className="text-sm text-gray-600">Top Emotion</div>
+                  <div className="text-sm text-gray-600">
+                    Top {currentLayer?.type === "poll" ? "Answer" : "Emotion"}
+                  </div>
                 </div>
               </div>
-
               <div>
                 <div className="text-sm font-medium text-gray-700 mb-2">
                   Recent Activity
                 </div>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {filteredSubmissions.slice(0, 8).map((s) => {
-                    const emotion = emotionMap.get(s.emotionId);
-
+                    const emotion = emotionMap.get(s.emotionId || "");
                     return (
                       <div
                         key={s.id}
@@ -672,13 +957,27 @@ export default function Page() {
                         <div
                           className="flex-shrink-0 w-5 h-5 rounded-full border-2 border-white"
                           style={{
-                            backgroundColor: emotion?.color || "#999",
+                            backgroundColor:
+                              currentLayer?.type === "poll"
+                                ? [
+                                    "#FFEDA0",
+                                    "#FEB24C",
+                                    "#FD8D3C",
+                                    "#F03B20",
+                                    "#BD0026",
+                                  ][
+                                    (currentLayer.options?.indexOf(s.mood) ||
+                                      0) % 5
+                                  ]
+                                : emotion?.color || "#999",
                           }}
                         ></div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate">
-                            {emotion?.label || "Unknown"} by{" "}
-                            {s.name || "Anonymous"}
+                            {currentLayer?.type === "poll"
+                              ? s.mood
+                              : emotion?.label || s.mood}{" "}
+                            by {s.name || "Anonymous"}
                           </div>
                           <div className="text-xs text-gray-600 truncate">
                             {s.mood}
@@ -696,6 +995,7 @@ export default function Page() {
             </div>
           </div>
         )}
+
         {/* Share Form Panel */}
         {showForm && (
           <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-40 w-[95%] max-w-lg bg-white border border-gray-200 rounded-lg shadow-xl">
@@ -703,7 +1003,9 @@ export default function Page() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Heart className="w-5 h-5 text-red-500" />
-                  <div className="font-semibold">Share Your Mood</div>
+                  <div className="font-semibold">
+                    Share to {currentLayer?.name}
+                  </div>
                 </div>
                 <button
                   onClick={() => setShowForm(false)}
@@ -713,7 +1015,6 @@ export default function Page() {
                 </button>
               </div>
             </div>
-
             <div className="p-4">
               <div className="mb-4">
                 <div className="text-sm font-medium text-gray-700 mb-2">
@@ -731,46 +1032,72 @@ export default function Page() {
                   {nameText.length}/50
                 </div>
               </div>
-
+              {currentLayer?.type === "free-text" && (
+                <div className="mb-4">
+                  <div className="text-sm font-medium text-gray-700 mb-2">
+                    {currentLayer.id === "global-moods"
+                      ? "How are you feeling?"
+                      : "Emotion (Optional)"}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {EMOTIONS.map((e) => (
+                      <button
+                        key={e.id}
+                        onClick={() => setSelectedEmotionId(e.id)}
+                        className={`flex items-center gap-2 p-2 rounded-md border text-sm font-medium transition-colors ${
+                          selectedEmotionId === e.id
+                            ? "bg-blue-50 border-blue-300 text-blue-800"
+                            : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        <e.icon className="w-4 h-4" />
+                        <span>{e.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="mb-4">
                 <div className="text-sm font-medium text-gray-700 mb-2">
-                  How are you feeling?
+                  {currentLayer?.type === "poll"
+                    ? "Choose an Option"
+                    : currentLayer?.description || "What's on your mind?"}
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {EMOTIONS.map((e) => (
-                    <button
-                      key={e.id}
-                      onClick={() => setSelectedEmotionId(e.id)}
-                      className={`flex items-center gap-2 p-2 rounded-md border text-sm font-medium transition-colors ${
-                        selectedEmotionId === e.id
-                          ? "bg-blue-50 border-blue-300 text-blue-800"
-                          : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
-                      }`}
-                    >
-                      <e.icon className="w-4 h-4" />
-                      <span>{e.label}</span>
-                    </button>
-                  ))}
-                </div>
+                {currentLayer?.type === "poll" ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {currentLayer.options?.map((option) => (
+                      <button
+                        key={option}
+                        onClick={() => setMoodText(option)}
+                        className={`flex items-center gap-2 p-2 rounded-md border text-sm font-medium transition-colors ${
+                          moodText === option
+                            ? "bg-blue-50 border-blue-300 text-blue-800"
+                            : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        <span>{option}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <textarea
+                    value={moodText}
+                    onChange={(ev) => setMoodText(ev.target.value)}
+                    rows={3}
+                    maxLength={280}
+                    placeholder={
+                      currentLayer?.description ||
+                      "Share what's on your mind..."
+                    }
+                    className="w-full border border-gray-300 rounded-md p-3 text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                )}
+                {currentLayer?.type !== "poll" && (
+                  <div className="text-right text-xs text-gray-500 mt-1">
+                    {moodText.length}/280
+                  </div>
+                )}
               </div>
-
-              <div className="mb-4">
-                <div className="text-sm font-medium text-gray-700 mb-2">
-                  What&apos;s on your mind?
-                </div>
-                <textarea
-                  value={moodText}
-                  onChange={(ev) => setMoodText(ev.target.value)}
-                  rows={3}
-                  maxLength={280}
-                  placeholder="Share what's making you feel this way..."
-                  className="w-full border border-gray-300 rounded-md p-3 text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <div className="text-right text-xs text-gray-500 mt-1">
-                  {moodText.length}/280
-                </div>
-              </div>
-
               <div className="flex items-center justify-between">
                 <button
                   onClick={() => {
@@ -784,17 +1111,18 @@ export default function Page() {
                 </button>
                 <button
                   onClick={handleSubmit}
-                  disabled={!moodText.trim()}
+                  disabled={currentLayer?.type !== "poll" && !moodText.trim()}
                   className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                 >
                   <Send className="w-4 h-4" />
-                  Share Mood
+                  Share
                 </button>
               </div>
             </div>
           </div>
         )}
-        {/* Recent Moods Toggle */}
+
+        {/* Recent Submissions Toggle */}
         <div className="absolute bottom-4 left-4 z-40">
           <button
             onClick={() => setShowRecent(!showRecent)}
@@ -807,24 +1135,17 @@ export default function Page() {
             <Clock className="w-4 h-4" />
             <span className="hidden sm:inline">Recent</span>
           </button>
-
           {showRecent && (
             <div className="absolute bottom-full left-0 mb-2 w-72 bg-white border border-gray-200 rounded-lg shadow-xl">
               <div className="p-3 border-b border-gray-100">
-                <div className="font-semibold text-sm">Recent Moods</div>
+                <div className="font-semibold text-sm">
+                  Recent in {currentLayer?.name}
+                </div>
               </div>
               <div className="p-3 max-h-64 overflow-y-auto">
                 <div className="space-y-2">
                   {filteredSubmissions.slice(0, 6).map((s) => {
-                    const emotion = emotionMap.get(s.emotionId);
-                    console.log("Recent submission:", {
-                      id: s.id,
-                      emotion: emotion?.label,
-                      name: s.name,
-                      mood: s.mood,
-                      continent: s.continent,
-                      timestamp: s.timestamp,
-                    });
+                    const emotion = emotionMap.get(s.emotionId || "");
                     return (
                       <div
                         key={s.id}
@@ -834,13 +1155,27 @@ export default function Page() {
                         <div
                           className="w-4 h-4 rounded-full flex-shrink-0"
                           style={{
-                            backgroundColor: emotion?.color || "#999",
+                            backgroundColor:
+                              currentLayer?.type === "poll"
+                                ? [
+                                    "#FFEDA0",
+                                    "#FEB24C",
+                                    "#FD8D3C",
+                                    "#F03B20",
+                                    "#BD0026",
+                                  ][
+                                    (currentLayer.options?.indexOf(s.mood) ||
+                                      0) % 5
+                                  ]
+                                : emotion?.color || "#999",
                           }}
                         ></div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate">
-                            {emotion?.label || "Unknown"} by{" "}
-                            {s.name || "Anonymous"}
+                            {currentLayer?.type === "poll"
+                              ? s.mood
+                              : emotion?.label || s.mood}{" "}
+                            by {s.name || "Anonymous"}
                           </div>
                           <div className="text-xs text-gray-600 truncate">
                             {s.mood}
@@ -858,6 +1193,7 @@ export default function Page() {
             </div>
           )}
         </div>
+
         {/* Filter Toggle */}
         <div className="absolute bottom-4 right-4 z-40">
           <button
@@ -872,7 +1208,6 @@ export default function Page() {
             <Filter className="w-4 h-4" />
             <span className="hidden sm:inline">Filters</span>
           </button>
-
           {showFilters && (
             <div className="absolute bottom-full right-0 mb-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl">
               <div className="p-4 border-b border-gray-100">
@@ -881,9 +1216,7 @@ export default function Page() {
                   <div className="font-semibold">Filters & View</div>
                 </div>
               </div>
-
               <div className="p-4 space-y-4">
-                {/* View Toggle */}
                 <div>
                   <div className="text-sm font-medium text-gray-700 mb-2">
                     View Mode
@@ -902,14 +1235,12 @@ export default function Page() {
                     </button>
                     {showHeatmap && (
                       <div className="text-xs text-gray-500 ml-2">
-                        Density visualization based on mood intensity and
-                        recency
+                        Density visualization based on{" "}
+                        {currentLayer?.type === "poll" ? "answers" : "emotions"}
                       </div>
                     )}
                   </div>
                 </div>
-
-                {/* Time Filter */}
                 <div>
                   <div className="text-sm font-medium text-gray-700 mb-2">
                     Time Range
@@ -927,73 +1258,71 @@ export default function Page() {
                     <option value="month">Last Month</option>
                   </select>
                 </div>
-
-                {/* Emotion Filters */}
-                <div>
-                  <div className="text-sm font-medium text-gray-700 mb-2">
-                    Emotions ({selectedEmotions.size}/{EMOTIONS.length}{" "}
-                    selected)
-                  </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    <div className="flex items-center gap-2 mb-2">
-                      <button
-                        onClick={() =>
-                          setSelectedEmotions(
-                            new Set(EMOTIONS.map((e) => e.id))
-                          )
-                        }
-                        className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-                      >
-                        Select All
-                      </button>
-                      <span className="text-gray-300">|</span>
-                      <button
-                        onClick={() => setSelectedEmotions(new Set())}
-                        className="text-xs text-gray-600 hover:text-gray-800 font-medium"
-                      >
-                        Clear All
-                      </button>
+                {currentLayer?.type === "free-text" && (
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-2">
+                      Emotions ({selectedEmotions.size}/{EMOTIONS.length}{" "}
+                      selected)
                     </div>
-                    {EMOTIONS.map((emotion) => (
-                      <label
-                        key={emotion.id}
-                        className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedEmotions.has(emotion.id)}
-                          onChange={() => handleEmotionToggle(emotion.id)}
-                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                        />
-                        <div
-                          className="w-4 h-4 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: emotion.color }}
-                        ></div>
-                        <div className="flex items-center gap-2 flex-1">
-                          <emotion.icon className="w-4 h-4 text-gray-600" />
-                          <span className="text-sm font-medium">
-                            {emotion.label}
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {
-                            filteredSubmissions.filter(
-                              (s) => s.emotionId === emotion.id
-                            ).length
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      <div className="flex items-center gap-2 mb-2">
+                        <button
+                          onClick={() =>
+                            setSelectedEmotions(
+                              new Set(EMOTIONS.map((e) => e.id))
+                            )
                           }
-                        </div>
-                      </label>
-                    ))}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          Select All
+                        </button>
+                        <span className="text-gray-300">|</span>
+                        <button
+                          onClick={() => setSelectedEmotions(new Set())}
+                          className="text-xs text-gray-600 hover:text-gray-800 font-medium"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                      {EMOTIONS.map((emotion) => (
+                        <label
+                          key={emotion.id}
+                          className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedEmotions.has(emotion.id)}
+                            onChange={() => handleEmotionToggle(emotion.id)}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <div
+                            className="w-4 h-4 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: emotion.color }}
+                          ></div>
+                          <div className="flex items-center gap-2 flex-1">
+                            <emotion.icon className="w-4 h-4 text-gray-600" />
+                            <span className="text-sm font-medium">
+                              {emotion.label}
+                            </span>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {
+                              filteredSubmissions.filter(
+                                (s) => s.emotionId === emotion.id
+                              ).length
+                            }
+                          </div>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-
-                {/* Filter Summary */}
+                )}
                 {(selectedEmotions.size < EMOTIONS.length ||
                   timeFilter !== "all") && (
                   <div className="pt-2 border-t border-gray-200">
                     <div className="text-xs text-gray-600 mb-2">
                       Showing {filteredSubmissions.length} of{" "}
-                      {submissions.length} moods
+                      {submissions.length} submissions
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {timeFilter !== "all" && (
@@ -1002,12 +1331,13 @@ export default function Page() {
                           {getTimeFilterLabel(timeFilter)}
                         </span>
                       )}
-                      {selectedEmotions.size < EMOTIONS.length && (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-md">
-                          <Filter className="w-3 h-3" />
-                          {selectedEmotions.size} emotions
-                        </span>
-                      )}
+                      {currentLayer?.type === "free-text" &&
+                        selectedEmotions.size < EMOTIONS.length && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-md">
+                            <Filter className="w-3 h-3" />
+                            {selectedEmotions.size} emotions
+                          </span>
+                        )}
                     </div>
                   </div>
                 )}
