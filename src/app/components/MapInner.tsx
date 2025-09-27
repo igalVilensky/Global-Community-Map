@@ -254,7 +254,7 @@ export default function Page() {
   ]);
   const [currentLayerId, setCurrentLayerId] = useState<string>("global-moods");
   const [selectedEmotionId, setSelectedEmotionId] = useState<string | null>(
-    EMOTIONS[0].id
+    null
   );
   const [moodText, setMoodText] = useState<string>("");
   const [nameText, setNameText] = useState<string>("");
@@ -514,26 +514,14 @@ export default function Page() {
         submissionData.emotionId = selectedEmotionId;
       }
 
-      // const docRef = await addDoc(
-      //   collection(db, "submissions"),
-      //   submissionData
-      // );
+      await addDoc(collection(db, "submissions"), submissionData);
 
       setMoodText("");
       setNameText("");
       setShowForm(false);
       setMapCenter(userLocation);
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        "message" in error
-      ) {
-        console.error("Error submitting mood:", error.code, error.message);
-      } else {
-        console.error("Error submitting mood:", error);
-      }
+      console.error("Error submitting mood:", error);
       alert("Failed to submit. Please try again.");
     }
   };
@@ -632,7 +620,7 @@ export default function Page() {
             value={currentLayerId}
             onChange={(value) => {
               setCurrentLayerId(value);
-              setSelectedEmotionId(EMOTIONS[0].id);
+              setSelectedEmotionId(null);
               setSelectedEmotions(new Set(EMOTIONS.map((e) => e.id)));
               setTimeFilter("all");
             }}
@@ -1043,7 +1031,11 @@ export default function Page() {
                     {EMOTIONS.map((e) => (
                       <button
                         key={e.id}
-                        onClick={() => setSelectedEmotionId(e.id)}
+                        onClick={() =>
+                          setSelectedEmotionId(
+                            selectedEmotionId === e.id ? null : e.id
+                          )
+                        }
                         className={`flex items-center gap-2 p-2 rounded-md border text-sm font-medium transition-colors ${
                           selectedEmotionId === e.id
                             ? "bg-blue-50 border-blue-300 text-blue-800"
@@ -1103,7 +1095,7 @@ export default function Page() {
                   onClick={() => {
                     setMoodText("");
                     setNameText("");
-                    setSelectedEmotionId(EMOTIONS[0].id);
+                    setSelectedEmotionId(null);
                   }}
                   className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
                 >
